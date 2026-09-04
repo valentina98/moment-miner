@@ -1,0 +1,11 @@
+__pycache__/
+*.egg-info/
+venv/
+.venv/
+mm_data/
+.claude/tmp/
+.pytest_cache/
+examples
+refs/
+footage/
+research/

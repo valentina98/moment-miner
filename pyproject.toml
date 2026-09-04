@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "moment-miner"
+version = "0.1.0"
+description = "Natural-language and example-based search over large video archives, with lossless clip export"
+requires-python = ">=3.11"
+dependencies = [
+    "click>=8.1",
+    "lancedb>=0.15",
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+asr = ["faster-whisper>=1.0"]
+siglip = ["torch>=2.2", "transformers>=4.49", "pillow>=10.0"]
+# Pinned: smartcut was deprecated 2026-02 and PyAV is an exact pin of its own.
+smartcut = ["smartcut==1.7"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+mm = "moment_miner.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["moment_miner*"]
+
+[tool.setuptools.package-data]
+moment_miner = ["templates/*.csv"]
+
+# Pyright resolves imports from this venv (types only — dev still runs in Docker).
+# Needed because the dir is `venv/`, not the `.venv/` Pyright auto-detects.
+[tool.pyright]
+venvPath = "."
+venv = "venv"
