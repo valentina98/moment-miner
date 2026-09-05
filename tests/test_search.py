@@ -28,6 +28,22 @@ def test_vector_and_fts_search(tmp_path):
     assert fts and fts[0]["text"] == "backflip off wall"
 
 
+def test_second_mount_root_upserts_rather_than_duplicating(tmp_path):
+    be = MockBackend()
+    store = SegmentStore(tmp_path, be.name)
+    docs = ["athlete performs kong vault", "crowd waiting"]
+    store.add(_rows(be, docs))
+    again = _rows(be, docs)
+    for r in again:
+        r["path"] = "/other/root/v1.mp4"
+    store.add(again)
+
+    assert store.count() == len(docs)
+    assert {r["path"] for r in store.vector_search(be.embed_text(docs)[0])} == {
+        "/other/root/v1.mp4"
+    }
+
+
 def test_rrf_prefers_agreement():
     a = [{"id": "x"}, {"id": "y"}]
     b = [{"id": "y"}, {"id": "z"}]

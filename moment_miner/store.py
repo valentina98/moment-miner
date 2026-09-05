@@ -32,7 +32,15 @@ class SegmentStore:
         for r in rows:
             r["vector"] = np.asarray(r["vector"], dtype=np.float32)
         if self.table_name in self._names():
-            self.db.open_table(self.table_name).add(rows)
+            # The same file reached under two mount roots fingerprints alike, so
+            # its rows share an id and rrf_fuse would credit that id twice.
+            (
+                self.db.open_table(self.table_name)
+                .merge_insert("id")
+                .when_matched_update_all()
+                .when_not_matched_insert_all()
+                .execute(rows)
+            )
         else:
             self.db.create_table(self.table_name, rows)
 
