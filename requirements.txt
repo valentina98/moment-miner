@@ -1,4 +1,4 @@
 # Runtime deps. Single source of truth is pyproject.toml — this just selects extras.
 # CPU-only dev machines: first run
 #   pip install torch --index-url https://download.pytorch.org/whl/cpu
--e .[asr,siglip,smartcut]
+-e .[asr,caption,siglip,smartcut]

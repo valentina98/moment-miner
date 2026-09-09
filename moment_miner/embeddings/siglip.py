@@ -33,15 +33,14 @@ class SiglipBackend(EmbeddingBackend):
             feats = self.model.get_text_features(**inputs)
         return self._normalize(feats)
 
-    def embed_segment(self, frames: np.ndarray) -> np.ndarray:
+    def embed_frames(self, frames: np.ndarray) -> np.ndarray:
         from PIL import Image
 
         images = [Image.fromarray(f) for f in frames]
         inputs = self.processor(images=images, return_tensors="pt").to(self.device)
         with self._torch.no_grad():
             feats = self.model.get_image_features(**inputs)
-        pooled = self._normalize(feats).mean(axis=0)
-        return pooled / np.linalg.norm(pooled)
+        return self._normalize(feats)
 
     def _normalize(self, feats) -> np.ndarray:
         # get_text_features returns a ModelOutput in some transformers

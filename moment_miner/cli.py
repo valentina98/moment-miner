@@ -6,8 +6,10 @@ from pathlib import Path
 
 import click
 
+from .locate import LOCATORS
 from .manifest import Manifest
-from .store import SegmentStore
+from .motion import STATIC_MAX
+from .store import MotionStore, SegmentStore
 from .timefmt import fmt_ts, parse_ts
 
 
@@ -46,9 +48,34 @@ def help_cmd(ctx, command):
 @click.option("--asr-model", default="small", show_default=True)
 @click.option("--reindex", is_flag=True,
               help="Re-process videos even if already indexed.")
+@click.option("--caption", default=None,
+              help="Caption each segment with a Claude model (e.g. "
+                   "claude-haiku-4-5) and add it to the searchable text. "
+                   "Spends money; needs ANTHROPIC_API_KEY or Claude Code "
+                   "credentials. Captions are cached beside the footage.")
+@click.option("--caption-dir", default=None,
+              help="Write caption sidecars here instead of beside each video "
+                   "(use when the archive is mounted read-only).")
+@click.option("--caption-frames", default=None, type=int,
+              help="Force the stills sent per segment. By default the count "
+                   "follows from the segment's span and --stride. Each still "
+                   "is ~170 input tokens, the dominant cost of a caption pass.")
+@click.option("--caption-frames-short", default=None, type=int,
+              help="Force the count for short videos instead.")
+@click.option("--caption-frames-long", default=None, type=int,
+              help="Stills per segment for long videos instead. Defaults to "
+                   "--caption-frames.")
+@click.option("--short-video", "short_video_s", default=8.0, show_default=True,
+              help="A video no longer than this many seconds counts as short. "
+                   "The default is one window.")
+@click.option("--long-video", "long_video_s", default=120.0, show_default=True,
+              help="A video at least this many seconds counts as long.")
 @click.pass_obj
-def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex):
+def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex,
+          caption, caption_dir, caption_frames, caption_frames_short,
+          caption_frames_long, short_video_s, long_video_s):
     """Scan FOLDER recursively and index new/changed videos."""
+    from .captions import MissingCaptionCredentials, get_caption_backend
     from .embeddings import get_backend
     from .indexer import index_pending
 
@@ -59,11 +86,70 @@ def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex):
     click.echo(f"scan: {counts}")
     be = get_backend(backend)
     store = SegmentStore(data_dir, be.name)
-    result = index_pending(
-        manifest, store, be, use_asr=asr, asr_model=asr_model,
-        win=window, stride=stride, log=click.echo,
-    )
+    try:
+        result = index_pending(
+            manifest, store, be, use_asr=asr, asr_model=asr_model,
+            motion_store=MotionStore(data_dir),
+            win=window, stride=stride, log=click.echo,
+            caption_backend=get_caption_backend(caption) if caption else None,
+            caption_dir=caption_dir,
+            caption_frames=caption_frames,
+            caption_frames_short=caption_frames_short,
+            caption_frames_long=caption_frames_long,
+            short_video_s=short_video_s,
+            long_video_s=long_video_s,
+        )
+    except MissingCaptionCredentials as e:
+        raise click.ClickException(str(e)) from e
     click.echo(f"done: {result}")
+
+
+@main.command("caption-compare")
+@click.argument("caption_files", nargs=-1, required=True,
+                type=click.Path(exists=True, dir_okay=False))
+@click.option("-o", "--out", default=None, type=click.Path(dir_okay=False),
+              help="Where to write the page. Defaults to "
+                   "caption-comparison.html inside --videos, so everything "
+                   "about an archive stays on the archive.")
+@click.option("--videos", default=None, type=click.Path(exists=True, file_okay=False),
+              help="Folder holding the videos, so the page can show each "
+                   "segment's stills. Omit for a text-only page.")
+@click.option("--segments", "segments_file", default=None,
+              type=click.Path(exists=True, dir_okay=False),
+              help="seg,video,t0,t1 CSV, needed when the caption files carry "
+                   "only seg,caption instead of the sidecar columns.")
+@click.option("--frames-dir", default=None, type=click.Path(exists=True, file_okay=False),
+              help="Use stills already extracted here, named <seg id>_*.jpg, "
+                   "instead of decoding the videos.")
+@click.option("--blind/--no-blind", default=True, show_default=True,
+              help="Hide which file wrote which caption and shuffle their "
+                   "order, so a comparison can be judged without knowing.")
+@click.option("--seed", default=0, show_default=True, help="Shuffle seed.")
+def caption_compare(caption_files, out, videos, segments_file, frames_dir, blind, seed):
+    """Render CAPTION_FILES side by side as one HTML page.
+
+    Marks where the models disagree, and by default hides which file is which
+    so the result can be judged blind.
+    """
+    from .compare import build
+
+    html, order_map = build(
+        [Path(f) for f in caption_files], videos=Path(videos) if videos else None,
+        segments_file=Path(segments_file) if segments_file else None,
+        frames_dir=Path(frames_dir) if frames_dir else None,
+        blind=blind, seed=seed,
+    )
+    out_path = Path(out) if out else (
+        Path(videos) if videos else Path(".")) / "caption-comparison.html"
+    out_path.write_text(html)
+    click.echo(f"wrote {out_path} ({out_path.stat().st_size / 1e6:.1f} MB)")
+    if blind:
+        key_path = out_path.with_name(out_path.stem + "-key.csv")
+        with key_path.open("w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=list(order_map[0]), lineterminator="\n")
+            w.writeheader()
+            w.writerows(order_map)
+        click.echo(f"key: {key_path} — leave it shut until every segment is judged")
 
 
 @main.command()
@@ -77,15 +163,26 @@ def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex):
 @click.option("--llc-dir", default=None,
               help="Write .llc files here instead; media is referenced "
                    "relatively, so open them in place (don't move them).")
+@click.option("--static/--moving", "static", default=None,
+              help="Keep only locked-off shots, or only shots where most of "
+                   "the frame changes. A filter, not a search term. Segments "
+                   "with no motion value carry none and drop out.")
+@click.option("--static-max", default=STATIC_MAX, show_default=True,
+              help="A shot is static when fewer than this fraction of pixels "
+                   "change between frames. Applied here, not at index time, "
+                   "so retuning it costs nothing.")
 @click.pass_obj
-def search(data_dir, query, k, backend, as_json, llc, llc_dir):
+def search(data_dir, query, k, backend, as_json, llc, llc_dir, static,
+           static_max):
     """Semantic + transcript search; prints ranked timestamps."""
     from .embeddings import get_backend
     from .search import search as run_search
 
     be = get_backend(backend)
     store = SegmentStore(data_dir, be.name)
-    hits = run_search(query, be, store, k=k)
+    hits = run_search(query, be, store, k=k, static=static,
+                      motion_store=MotionStore(data_dir),
+                      static_max=static_max)
     if (llc or llc_dir) and hits:
         from .export import write_llc_projects
 
@@ -259,6 +356,11 @@ def annotate(folder, template_name, labels_path):
     click.echo("videos:")
     for i, v in enumerate(videos, 1):
         click.echo(f"  [{i}] {v.name}")
+    # Append against the file's own header, not a fixed field order: a labels file may carry
+    # extra columns (the parkour template has `category`) and a positional write would shift
+    # every field one place.
+    with labels.open(newline="") as f:
+        fieldnames = next(csv.reader(f))
     added = 0
     while True:
         query = click.prompt("query (empty to finish)", default="",
@@ -272,7 +374,9 @@ def annotate(folder, template_name, labels_path):
             click.echo("end must be after start — row skipped")
             continue
         with labels.open("a", newline="") as f:
-            csv.writer(f).writerow([query, videos[idx - 1].name, start, end])
+            csv.DictWriter(f, fieldnames).writerow(
+                {"query": query, "video": videos[idx - 1].name,
+                 "start": start, "end": end})
         added += 1
         click.echo(f"added ({added} this session)")
     click.echo(f"done — {added} label(s) appended to {labels}")
@@ -318,3 +422,92 @@ def status(data_dir, show_errors):
 
 if __name__ == "__main__":
     main()
+
+
+def _score_video(path: str, query_vec, backend, fps: float):
+    import numpy as np
+
+    from .frames import frame_batches
+    from .locate import heatmap
+
+    chunks, stamps = [], []
+    for frames, ts in frame_batches(path, fps):
+        chunks.append(heatmap(backend.embed_frames(frames), query_vec))
+        stamps.append(ts)
+    if not chunks:
+        return np.array([]), np.array([])
+    return np.concatenate(chunks), np.concatenate(stamps)
+
+
+@main.command()
+@click.option("-q", "--query", help="One query to locate.")
+@click.option("-v", "--video", type=click.Path(exists=True, dir_okay=False),
+              help="One video to search inside.")
+@click.option("--labels", type=click.Path(exists=True, dir_okay=False),
+              help="CSV of query,video,start,end — locate every row and shade the label.")
+@click.option("--videos", type=click.Path(exists=True, file_okay=False),
+              help="Where the videos named by --labels live.")
+@click.option("--fps", default=5.0, show_default=True,
+              help="Frames scored per second. The resolution knob, set per query.")
+@click.option("--locator", "locator_name", default="maxsub", show_default=True,
+              type=click.Choice(sorted(LOCATORS)))
+@click.option("--duration", type=float,
+              help="Region length in seconds. Required by --locator window, refused by maxsub.")
+@click.option("--top", "top_k", default=1, show_default=True, help="Regions per video.")
+@click.option("--backend", default="siglip", show_default=True)
+@click.option("-o", "--out", type=click.Path(dir_okay=False),
+              help="Write an HTML page of the score curves.")
+def locate(query, video, labels, videos, fps, locator_name, duration, top_k, backend, out):
+    """Score a video frame by frame against a query and pick the region to cut.
+
+    The index ranks whole segments; this says where inside one the action is.
+    """
+    from .embeddings import get_backend
+    from .locate import build_locator
+
+    if labels:
+        if not videos:
+            raise click.UsageError("--labels needs --videos")
+        rows = [r for r in csv.DictReader(open(labels, newline=""))
+                if r.get("video", "").strip()]
+    elif query and video:
+        rows = [{"query": query, "video": video, "start": "", "end": ""}]
+    else:
+        raise click.UsageError("give --query and --video, or --labels and --videos")
+
+    be = get_backend(backend)
+    loc = build_locator(locator_name, duration=duration, top_k=top_k)
+    root = Path(videos) if videos else None
+    panels = []
+    for r in rows:
+        path = r["video"] if root is None else next(
+            (str(p) for p in root.rglob(r["video"])), None)
+        if path is None:
+            click.echo(f"  skipped {r['video']}: not found under {videos}")
+            continue
+        qv = be.embed_text([r["query"]])[0]
+        scores, times = _score_video(path, qv, be, fps)
+        if scores.size == 0:
+            click.echo(f"  skipped {r['video']}: no frames decoded")
+            continue
+        regions = loc.locate(scores, times)
+        click.echo(f"{r['query']}  [{Path(path).name}]")
+        for g in regions:
+            click.echo(f"  {fmt_ts(g.t0)} - {fmt_ts(g.t1)}"
+                       f"  ({g.t1 - g.t0:.1f}s, peak {g.peak:.4f})")
+        panels.append({
+            "query": r["query"], "video": Path(path).name,
+            "times": [round(float(t), 3) for t in times],
+            "scores": [round(float(s), 5) for s in scores],
+            "regions": [{"t0": g.t0, "t1": g.t1, "peak": g.peak} for g in regions],
+            "label": ([float(r["start"]), float(r["end"])]
+                      if r.get("start", "").strip() and r.get("end", "").strip() else None),
+        })
+
+    if out:
+        template = (pkg_files("moment_miner") / "templates" / "locate.html").read_text()
+        Path(out).write_text(template.replace(
+            "__PANELS__", jsonlib.dumps(panels)).replace(
+            "__META__", jsonlib.dumps({"fps": fps, "locator": locator_name,
+                                       "duration": duration, "backend": be.name})))
+        click.echo(f"wrote {out} ({len(panels)} panel(s))")

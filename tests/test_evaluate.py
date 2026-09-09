@@ -37,3 +37,21 @@ def test_evaluate_recall_and_mrr(tmp_path):
     by_q = {q["query"]: q for q in report["per_query"]}
     assert by_q["kong vault"]["found"] == 1
     assert by_q["backflip"]["found"] == 0
+
+
+def test_load_labels_ignores_extra_columns_and_blank_lines(tmp_path):
+    """The parkour template carries a `category` column and blank lines between groups.
+    Neither is a label field, and neither may reach the returned rows."""
+    labels_csv = tmp_path / "labels.csv"
+    labels_csv.write_text(
+        "query,category,video,start,end\n"
+        "kong vault,PK,clip0.mp4,0:12,0:16\n"
+        "backflip,flips,,,\n"                    # unfilled idea, skipped
+        "\n"                                     # group separator, skipped
+        "cliff jump into water,cliff jumping,clip1.mp4,0:01,0:03\n"
+    )
+    labels = load_labels(str(labels_csv))
+    assert len(labels) == 2
+    assert set(labels[0]) == {"query", "video", "t0", "t1"}
+    assert labels[0]["query"] == "kong vault" and labels[0]["t0"] == 12.0
+    assert labels[1]["video"] == "clip1.mp4"

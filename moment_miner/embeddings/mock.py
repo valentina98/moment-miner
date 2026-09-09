@@ -19,5 +19,5 @@ class MockBackend(EmbeddingBackend):
     def embed_text(self, texts: list[str]) -> np.ndarray:
         return np.stack([self._vec(t.encode()) for t in texts])
 
-    def embed_segment(self, frames: np.ndarray) -> np.ndarray:
-        return self._vec(frames.tobytes())
+    def embed_frames(self, frames: np.ndarray) -> np.ndarray:
+        return np.stack([self._vec(f.tobytes()) for f in frames])

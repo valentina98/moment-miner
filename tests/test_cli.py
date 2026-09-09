@@ -21,10 +21,29 @@ def test_annotate_from_template_and_append(tmp_path):
 
     rows = list(csv.DictReader((folder / "labels.csv").open()))
     filled = [r for r in rows if r["video"]]
-    assert filled == [{"query": "kong vault over an obstacle",
+    # category comes back empty rather than holding the video name: a positional append
+    # against this 5-column header would shift every field one place.
+    assert filled == [{"query": "kong vault over an obstacle", "category": "",
                        "video": "run2.mp4", "start": "4.0", "end": "9.0"}]
-    # template queries are present as unfilled rows
-    assert any(r["query"] == "a person performs a backflip" for r in rows)
+    # template queries are present as unfilled rows, carrying their category
+    assert any(r["query"] == "backflip" and r["category"] == "flips" for r in rows)
+
+
+def test_annotate_appends_to_a_labels_file_without_a_category_column(tmp_path):
+    """footage/labels.csv predates the column, so the four-field header must still work."""
+    folder = tmp_path / "footage"
+    folder.mkdir()
+    (folder / "run1.mp4").write_bytes(b"x")
+    (folder / "labels.csv").write_text("query,video,start,end\n")
+
+    result = CliRunner().invoke(main, [
+        "annotate", str(folder),
+    ], input="backflip\n1\n0:02\n0:05\n\n")
+    assert result.exit_code == 0, result.output
+
+    rows = list(csv.DictReader((folder / "labels.csv").open()))
+    assert rows == [{"query": "backflip", "video": "run1.mp4",
+                     "start": "2.0", "end": "5.0"}]
 
 
 def test_help_command():

@@ -1,0 +1,67 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Moment Miner — score curves</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 24px; background: #fbfbfa; color: #1a1a1a; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .meta { color: #666; margin-bottom: 24px; font-size: 13px; }
+  .panel { background: #fff; border: 1px solid #e3e3e0; border-radius: 6px; padding: 14px 16px; margin-bottom: 14px; }
+  .q { font-weight: 600; }
+  .v { color: #666; font-size: 13px; }
+  .r { font-size: 13px; color: #444; margin-top: 6px; font-variant-numeric: tabular-nums; }
+  svg { display: block; width: 100%; height: 150px; margin-top: 8px; }
+  .curve { fill: none; stroke: #2b6cb0; stroke-width: 1.4; }
+  .base { stroke: #bbb; stroke-dasharray: 3 3; stroke-width: 1; }
+  .label { fill: #f0b429; opacity: .28; }
+  .region { fill: #38a169; opacity: .22; }
+  .axis { fill: #999; font-size: 10px; }
+  .key { margin-bottom: 18px; font-size: 13px; color: #555; }
+  .sw { display: inline-block; width: 11px; height: 11px; border-radius: 2px; vertical-align: -1px; margin-right: 4px; }
+</style>
+<h1>Score curves</h1>
+<div class="meta" id="meta"></div>
+<div class="key">
+  <span class="sw" style="background:#f0b429"></span>hand label &nbsp;
+  <span class="sw" style="background:#38a169"></span>located region &nbsp;
+  <span class="sw" style="background:#2b6cb0"></span>per-frame cosine &nbsp;
+  <span class="sw" style="background:#bbb"></span>clip median
+</div>
+<div id="panels"></div>
+<script>
+const PANELS = __PANELS__, META = __META__;
+document.getElementById("meta").textContent =
+  `${PANELS.length} panel(s) · ${META.fps} fps · locator ${META.locator}` +
+  (META.duration ? ` (${META.duration}s)` : "") + ` · backend ${META.backend}`;
+
+const W = 1000, H = 150, PAD = 22;
+const median = a => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
+
+for (const p of PANELS) {
+  const lo = Math.min(...p.scores), hi = Math.max(...p.scores);
+  const tmax = p.times[p.times.length - 1] || 1;
+  const x = t => PAD + (t / tmax) * (W - 2 * PAD);
+  const y = s => H - PAD - ((s - lo) / (hi - lo || 1)) * (H - 2 * PAD);
+  const rect = (a, b, cls) =>
+    `<rect class="${cls}" x="${x(a)}" y="${PAD - 8}" width="${Math.max(1, x(b) - x(a))}" height="${H - PAD - PAD + 8}"/>`;
+
+  const parts = [];
+  if (p.label) parts.push(rect(p.label[0], p.label[1], "label"));
+  for (const r of p.regions) parts.push(rect(r.t0, r.t1, "region"));
+  const m = median(p.scores);
+  parts.push(`<line class="base" x1="${PAD}" y1="${y(m)}" x2="${W - PAD}" y2="${y(m)}"/>`);
+  parts.push(`<polyline class="curve" points="${p.times.map((t, i) => `${x(t)},${y(p.scores[i])}`).join(" ")}"/>`);
+  for (let g = 0; g <= 4; g++) {
+    const t = (tmax * g) / 4;
+    parts.push(`<text class="axis" x="${x(t)}" y="${H - 6}" text-anchor="middle">${t.toFixed(1)}s</text>`);
+  }
+
+  const found = p.regions.map(r => `${r.t0.toFixed(1)}–${r.t1.toFixed(1)}s (${(r.t1 - r.t0).toFixed(1)}s)`).join(", ");
+  const lab = p.label ? `label ${p.label[0].toFixed(1)}–${p.label[1].toFixed(1)}s` : "no label";
+  const div = document.createElement("div");
+  div.className = "panel";
+  div.innerHTML = `<div class="q">${p.query}</div><div class="v">${p.video}</div>` +
+    `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${parts.join("")}</svg>` +
+    `<div class="r">${lab} · found ${found || "none"}</div>`;
+  document.getElementById("panels").appendChild(div);
+}
+</script>

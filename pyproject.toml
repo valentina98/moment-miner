@@ -15,6 +15,7 @@ dependencies = [
 
 [project.optional-dependencies]
 asr = ["faster-whisper>=1.0"]
+caption = ["anthropic>=1.0", "pillow>=10.0"]
 siglip = ["torch>=2.2", "transformers>=4.49", "pillow>=10.0"]
 # Pinned: smartcut was deprecated 2026-02 and PyAV is an exact pin of its own.
 smartcut = ["smartcut==1.7"]
@@ -27,7 +28,7 @@ mm = "moment_miner.cli:main"
 include = ["moment_miner*"]
 
 [tool.setuptools.package-data]
-moment_miner = ["templates/*.csv"]
+moment_miner = ["templates/*.csv", "templates/*.html"]
 
 # Pyright resolves imports from this venv (types only — dev still runs in Docker).
 # Needed because the dir is `venv/`, not the `.venv/` Pyright auto-detects.

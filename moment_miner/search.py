@@ -1,5 +1,6 @@
 from .embeddings.base import EmbeddingBackend
-from .store import SegmentStore
+from .motion import STATIC_MAX
+from .store import MotionStore, SegmentStore
 
 
 def rrf_fuse(rank_lists: list[list[dict]], k: int = 60) -> list[dict]:
@@ -35,10 +36,25 @@ def search(
     store: SegmentStore,
     k: int = 10,
     candidates: int = 50,
+    static: bool | None = None,
+    motion_store: MotionStore | None = None,
+    static_max: float = STATIC_MAX,
 ) -> list[dict]:
     vec = backend.embed_text([query])[0]
-    fused = rrf_fuse([
+    ranked = [
         store.vector_search(vec, k=candidates),
         store.text_search(query, k=candidates),
-    ])
-    return merge_overlapping(fused)[:k]
+    ]
+    if static is not None:
+        # Filtered before fusing, not after, so k results still come back.
+        # The threshold is applied here rather than at index time so it can be
+        # retuned without a re-index. A segment with no motion row carries no
+        # value and is dropped rather than guessed at.
+        ids = [r["id"] for lst in ranked for r in lst]
+        motion = motion_store.get(ids) if motion_store is not None else {}
+        ranked = [
+            [r for r in lst
+             if r["id"] in motion and (motion[r["id"]] < static_max) is static]
+            for lst in ranked
+        ]
+    return merge_overlapping(rrf_fuse(ranked))[:k]
