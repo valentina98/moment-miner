@@ -281,14 +281,14 @@ def mine(data_dir, query, folder, output, k, backend, pad, asr, smart):
     export the top-k matching moments as lossless clips into OUTPUT."""
     from .embeddings import get_backend
     from .export import export_clip
-    from .indexer import index_pending
+    from .indexer import index_pending, index_settings
     from .search import search as run_search
 
     manifest = Manifest(data_dir / "manifest.db")
     manifest.scan(folder)
     be = get_backend(backend)
     store = SegmentStore(data_dir, be.name)
-    pending = manifest.pending()
+    pending = manifest.pending(index_settings(be.name))
     if pending:
         click.echo(f"indexing {len(pending)} new/changed video(s)…")
         index_pending(manifest, store, be, use_asr=asr, log=click.echo)
