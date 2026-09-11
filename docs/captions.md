@@ -36,7 +36,7 @@ The first version asked for 15-30 words and got paragraphs: *"Graffiti-covered c
 
 | | `mm index --caption` | A Claude Code session |
 | --- | --- | --- |
-| Pays with | `ANTHROPIC_API_KEY` | Your Claude subscription |
+| Pays with | `ANTHROPIC_API_KEY`, or your Claude subscription when that is unset (see Credentials) | Your Claude subscription |
 | Frames | the stills the rule above picks (two at the defaults), at the 456x256 extraction raster | identical |
 | Prompt | `PROMPT` in `captions.py` | paste the same text |
 | Output | `captions.csv` + the index | a CSV you place at `<folder>/captions.csv` |
@@ -56,7 +56,7 @@ Resolved in this order, once, when the first caption is requested:
 2. Claude Code credentials at `$CLAUDE_CONFIG_DIR/.credentials.json` (default `~/.claude`), mounted into the container if you run in Docker
 3. Neither — one error naming both, raised before any frame is sent
 
-Captioning is the only stage that spends money. `mm index` without `--caption` needs no credentials at all.
+Captioning is the only stage that spends anything — money on an API key, session quota on a subscription. `mm index` without `--caption` needs no credentials at all.
 
 ## What it costs
 
