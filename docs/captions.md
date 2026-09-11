@@ -22,7 +22,7 @@ Captions are read back on the next pass. Re-indexing a folder — including `--r
 
 ## The method
 
-**Segment geometry.** 8-second window, 4-second stride (`moment_miner/indexer.py`, overridable with `--window` / `--stride`). Segments are anchored at the video's end and step back a stride at a time, so every one is full length and the video's final frame is the final frame of a segment — which is exactly where the frame sampler looks.
+**Segment geometry.** 8-second window, 4-second stride (`moment_miner/indexer.py`, overridable with `--window` / `--stride`). Segments start at 0 and step forward a stride at a time; a leftover under half a stride stretches the last segment to the video's end, and a larger one gets its own full-length segment ending there. So every segment is full length and the video's final frame is the final frame of a segment — which is exactly where the frame sampler looks.
 
 **Frames.** How many stills a segment gets follows from its span and the stride, not from a fixed number. Under one stride: one frame, in the middle. Under two strides: two, at a third and two thirds. Otherwise: anchored half a stride from the end and stepping back a whole stride at a time, as many as fit. That is one frame per stride-length block of video, at the block's midpoint — and since windows overlap by half, neighbouring windows agree on the frame they share. At the defaults — 8 s window, 4 s stride — an ordinary segment yields two frames, at 2 s and 6 s. The anchor is at the end because that is where the action resolves: the trick lands and recording stops.
 
@@ -37,7 +37,7 @@ The first version asked for 15-30 words and got paragraphs: *"Graffiti-covered c
 | | `mm index --caption` | A Claude Code session |
 | --- | --- | --- |
 | Pays with | `ANTHROPIC_API_KEY` | Your Claude subscription |
-| Frames | 3 stills, 15/50/85%, 640 px | identical |
+| Frames | the stills the rule above picks (two at the defaults), at the 456x256 extraction raster | identical |
 | Prompt | `PROMPT` in `captions.py` | paste the same text |
 | Output | `captions.csv` + the index | a CSV you place at `<folder>/captions.csv` |
 | Also loads | nothing | your `CLAUDE.md` and project memory |
@@ -60,15 +60,15 @@ Captioning is the only stage that spends money. `mm index` without `--caption` n
 
 ## What it costs
 
-Segments per hour of footage is `3600 / stride` — 900 at the default stride 4, and higher on an archive of short clips, whose truncated windows do not overlap (a 50-clip corpus measured 1086). Each segment sends 3 stills at ~306 input tokens each (`w x h / 750`) and gets back ~30 output tokens.
+Segments per hour of footage is `3600 / stride` — 900 at the default stride 4, and higher on an archive of short clips, whose truncated windows do not overlap (a 50-clip corpus measured 1086). Stills are sent at the 456x256 extraction raster — captioning reuses the frames decoded for the embedding and never upscales them — which is ~170 input tokens each (156 by `w x h / 750`, 170 by counting 28-pixel tiles; confirm with `count_tokens` before a bulk run). The prompt adds ~200 text tokens per segment, and ~30 output tokens come back.
 
-At 900 segments/hour and the two frames an ordinary segment yields: `900 x 2 x 306` = 0.55 M input tokens, `900 x 30` = 0.027 M output. **Frame count is the main cost lever** — the table below scales almost linearly with it, so forcing 5 frames costs about 2.5x what the rule's two do.
+At 900 segments/hour and the two frames an ordinary segment yields: `900 x (2 x 170 + 200)` = 0.49 M input tokens, `900 x 30` = 0.027 M output. **Frame count is the main cost lever** — each extra still adds ~170 tokens to a ~540-token request, so forcing 5 frames costs roughly 1.7x what the rule's two do.
 
 | Model | $/MTok in / out | Per hour of footage | Batch API (-50%) |
 | --- | --- | --- | --- |
-| Opus 5 | $5 / $25 | $3.43 | $1.72 |
-| Sonnet 5 | $2 / $10 | $1.37 | $0.69 |
-| Haiku 4.5 | $1 / $5 | $0.69 | $0.35 |
+| Opus 5 | $5 / $25 | $3.11 | $1.55 |
+| Sonnet 5 | $2 / $10 | $1.24 | $0.62 |
+| Haiku 4.5 | $1 / $5 | $0.62 | $0.31 |
 
 Prices read from Anthropic's model pricing 2026-06-24; re-check before a bulk run. Prompt caching does not help — every image is unique. The Batch API's 50% does.
 
@@ -88,7 +88,7 @@ make caption VIDEOS=footage CAPTION_MODEL=claude-haiku-4-5
 mm caption-compare opus.csv sonnet.csv haiku.csv --videos /videos
 ```
 
-Renders one HTML page: each segment's three stills, the captions under them, and a mark where the models disagree. Written to `caption-comparison.html` inside `--videos` — on the archive, with the footage it describes.
+Renders one HTML page: each segment's stills, the captions under them, and a mark where the models disagree. Written to `caption-comparison.html` inside `--videos` — on the archive, with the footage it describes.
 
 **Blind by default.** Which file wrote which caption is hidden and the column order is shuffled, because you necessarily know which model you launched; the blinding has to happen at judging time. The order is *balanced*, not merely random — every ordering used equally often, so each set sits in each column the same number of times. A free shuffle put one set in the middle column on 10 of 18 segments, which is exactly the position bias the shuffle exists to remove. The decode map is written beside the page as `<name>-key.csv`; leave it shut until every segment is judged. `--no-blind` labels the columns by filename instead.
 

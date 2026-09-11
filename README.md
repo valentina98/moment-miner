@@ -42,7 +42,7 @@ pollute the index.
 
 | Command | Purpose |
 |---|---|
-| `mm index FOLDER` | scan recursively, index new/changed videos (`--reindex`, `--no-asr`, `--backend`, `--caption`) |
+| `mm index FOLDER` | scan recursively, index new/changed videos and any whose segment geometry changed (`--reindex`, `--no-asr`, `--backend`, `--caption`) |
 | `mm search QUERY` | ranked timestamps (`-k`, `--json`, `--llc`, `--llc-dir`, `--static`/`--moving`, `--static-max`) |
 | `mm mine QUERY FOLDER` | index-if-needed → search → top-k clips (`-o`, `-k`, `--no-smart`) |
 | `mm locate -q Q -v VIDEO` | where inside one video the action is (`--labels`/`--videos` to sweep a CSV, `--fps`, `--locator`, `--duration`, `--top`, `-o`) |
@@ -77,7 +77,9 @@ material — a good default, not a constant.
 ## Architecture: two-tier "index cheap, verify smart"
 
 ```
-folder scan ─► SQLite manifest (size/mtime/partial-hash → incremental, resumable)
+folder scan ─► SQLite manifest (size/mtime/partial-hash → incremental, resumable;
+  records the window/stride/raster/backend each video was indexed under, so
+  changing any of them re-indexes it without --reindex)
   ├─ ffprobe metadata
   ├─ ASR: faster-whisper → word-timestamped transcript
   ├─ TIER 1: embeddings per 8s overlapping window ─► LanceDB (vector + FTS)

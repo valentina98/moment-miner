@@ -6,9 +6,10 @@ import pytest
 from moment_miner.embeddings.mock import MockBackend
 from moment_miner.frames import extract_frames, extract_windows
 from moment_miner.export import export_clip
-from moment_miner.indexer import index_pending, windows
+from moment_miner.indexer import index_pending, index_settings, windows
 from moment_miner.manifest import Manifest
 from moment_miner.probe import probe
+from moment_miner.search import search
 from moment_miner.store import SegmentStore
 
 from .conftest import requires_ffmpeg
@@ -191,3 +192,73 @@ def test_one_decode_pass_spawns_one_ffmpeg_for_the_aligned_spans(tmp_path, monke
     monkeypatch.setattr(fr, "extract_frames", counted)
     list(fr.extract_windows(str(out), spans, n=8, win=8.0))
     assert seeks == 1, f"{len(spans)} spans should cost 1 seek, not {seeks}"
+
+
+@pytest.fixture
+def indexable(tmp_path, monkeypatch):
+    """One video the indexer can process without ffmpeg.
+
+    Only `probe` and frame extraction are faked; the manifest, the store and
+    the settings bookkeeping under test are the real ones.
+    """
+    import moment_miner.indexer as idx
+
+    monkeypatch.setattr(idx, "probe", lambda p: {"duration": 10.0, "has_audio": False})
+    monkeypatch.setattr(
+        idx, "extract_windows",
+        lambda path, spans, n, win: (
+            (t0, t1, np.full((n, 8, 8, 3), int(t0) % 256, dtype=np.uint8))
+            for t0, t1 in spans
+        ),
+    )
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    video = archive / "a.mp4"
+    video.write_bytes(b"x" * 4096)
+    manifest = Manifest(tmp_path / "mm.db")
+    manifest.scan(archive)
+    be = MockBackend()
+    return manifest, SegmentStore(tmp_path / "data", be.name), be, str(video)
+
+
+def test_a_geometry_change_reindexes_without_the_reindex_flag(indexable):
+    """The failure this exists to stop: `windows()` changes, every segment id
+    shifts, and the volume keeps answering from rows no current run would
+    produce. It happened twice in three days and a person caught it both times.
+    """
+    manifest, store, be, _ = indexable
+
+    first = index_pending(manifest, store, be, use_asr=False, log=lambda *_: None)
+    assert first["indexed"] == 1 and first["segments"] == 2
+
+    again = index_pending(manifest, store, be, use_asr=False, log=lambda *_: None)
+    assert again["indexed"] == 0 and store.count() == 2
+
+    changed = index_pending(manifest, store, be, use_asr=False,
+                            win=4.0, stride=3.0, log=lambda *_: None)
+    assert changed["indexed"] == 1 and changed["segments"] == 3
+    # 3, not 4: the old geometry's segment at 2.0 s is one the new one never
+    # produces, so it survives the upsert and only delete_path clears it.
+    assert store.count() == 3
+
+
+def test_the_settings_recorded_are_the_ones_the_run_was_asked_for(indexable):
+    manifest, store, be, video = indexable
+    index_pending(manifest, store, be, use_asr=False, win=4.0, stride=2.0,
+                  log=lambda *_: None)
+    row = manifest.recorded_settings(video)
+    assert row["win"] == 4.0 and row["stride"] == 2.0
+    assert row["backend"] == be.name and row["frames_per_window"] == 8
+    assert (row["frame_w"], row["frame_h"]) == (456, 256)
+
+
+def test_an_index_with_no_recorded_settings_still_searches(indexable):
+    """An index built before this table existed keeps answering queries; it is
+    only the next `mm index` that rebuilds it."""
+    manifest, store, be, video = indexable
+    index_pending(manifest, store, be, use_asr=False, log=lambda *_: None)
+    with manifest.conn:
+        manifest.conn.execute("DELETE FROM index_settings")
+
+    assert [h["path"] for h in search("anything", be, store, k=3)] == [video]
+    assert [r["path"] for r in manifest.pending(index_settings(be.name))] == [video]

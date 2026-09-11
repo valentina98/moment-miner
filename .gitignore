@@ -4,6 +4,7 @@ venv/
 .venv/
 mm_data/
 .claude/tmp/
+.claude/settings.local.json
 .pytest_cache/
 examples
 refs/

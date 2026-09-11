@@ -29,7 +29,29 @@ CREATE TABLE IF NOT EXISTS transcripts (
     text TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_transcripts_video ON transcripts(video_id);
+CREATE TABLE IF NOT EXISTS index_settings (
+    path TEXT PRIMARY KEY,
+    win REAL NOT NULL,
+    stride REAL NOT NULL,
+    frames_per_window INTEGER NOT NULL,
+    frame_w INTEGER NOT NULL,
+    frame_h INTEGER NOT NULL,
+    backend TEXT NOT NULL,
+    indexed_at REAL NOT NULL
+);
 """
+
+# Every one of these feeds the segment geometry, and segment ids are
+# `{video_id}:{t0}`, so changing any of them shifts every id a video would
+# produce while its old rows stay in the table answering queries.
+SETTINGS_COLUMNS = ("win", "stride", "frames_per_window", "frame_w", "frame_h", "backend")
+
+
+def _settings_match(row: sqlite3.Row | None, settings: dict) -> bool:
+    # No row at all means an index built before this table existed. Re-index
+    # rather than guess what produced it -- guessing is what let two geometry
+    # changes ship unnoticed in three days.
+    return row is not None and all(row[c] == settings[c] for c in SETTINGS_COLUMNS)
 
 
 def fingerprint(path: str, chunk: int = 1 << 20) -> str:
@@ -92,17 +114,53 @@ class Manifest:
                 (prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%",),
             )
 
-    def pending(self) -> list[sqlite3.Row]:
-        return self.conn.execute(
-            "SELECT * FROM videos WHERE status = 'pending' ORDER BY path"
-        ).fetchall()
+    def pending(self, settings: dict | None = None) -> list[sqlite3.Row]:
+        """Videos needing work: new, changed, or indexed under other settings.
 
-    def mark_done(self, path: str, duration: float, backend: str):
+        `settings` is what the caller is about to index with; a done video
+        whose recorded row differs comes back too, so a geometry change
+        re-indexes without `--reindex`. Omit it and only new/changed videos
+        come back, which is what a caller that is not about to index wants.
+        Errored videos stay out either way -- they need `--reindex`, the same
+        as before.
+        """
+        if settings is None:
+            return self.conn.execute(
+                "SELECT * FROM videos WHERE status = 'pending' ORDER BY path"
+            ).fetchall()
+        recorded = {
+            r["path"]: r
+            for r in self.conn.execute("SELECT * FROM index_settings")
+        }
+        return [
+            row
+            for row in self.conn.execute(
+                "SELECT * FROM videos WHERE status IN ('pending', 'done')"
+                " ORDER BY path"
+            )
+            if row["status"] == "pending"
+            or not _settings_match(recorded.get(row["path"]), settings)
+        ]
+
+    def recorded_settings(self, path: str) -> sqlite3.Row | None:
+        """What the last index of `path` was built under, or None if unknown."""
+        return self.conn.execute(
+            "SELECT * FROM index_settings WHERE path=?", (path,)
+        ).fetchone()
+
+    def mark_done(self, path: str, duration: float, settings: dict):
+        now = time.time()
         with self.conn:
             self.conn.execute(
                 "UPDATE videos SET status='done', duration=?, backend=?,"
                 " indexed_at=?, error=NULL WHERE path=?",
-                (duration, backend, time.time(), path),
+                (duration, settings["backend"], now, path),
+            )
+            self.conn.execute(
+                "INSERT OR REPLACE INTO index_settings"
+                f" (path, {', '.join(SETTINGS_COLUMNS)}, indexed_at)"
+                f" VALUES ({', '.join('?' * (len(SETTINGS_COLUMNS) + 2))})",
+                (path, *(settings[c] for c in SETTINGS_COLUMNS), now),
             )
 
     def mark_error(self, path: str, error: str):

@@ -27,7 +27,6 @@ in Valya's session memory, not here.
   with-exemplars run scores higher for free.
 - `refs/` (git-ignored) and `/proj/lossless-cut`: cloned reference repos,
   read-only.
-- Valya runs `git commit` / `git push` herself — never commit.
 - Embedding backends stay pluggable behind `embeddings/base.py`; vectors must
   be L2-normalized (search ranks by L2 assuming it equals cosine).
 - After any search-quality change, run `make eval VIDEOS=footage

@@ -10,11 +10,38 @@ from .captions import (
     frames_for_duration,
 )
 from .embeddings.base import EmbeddingBackend
-from .frames import extract_windows
+from .frames import FRAME_H, FRAME_W, extract_windows
 from .manifest import Manifest
 from .motion import moving_fraction
 from .probe import probe
 from .store import MotionStore, SegmentStore
+
+DEFAULT_WIN = 8.0
+DEFAULT_STRIDE = 4.0
+DEFAULT_FRAMES_PER_WINDOW = 8
+
+
+def index_settings(
+    backend_name: str,
+    win: float = DEFAULT_WIN,
+    stride: float = DEFAULT_STRIDE,
+    frames_per_window: int = DEFAULT_FRAMES_PER_WINDOW,
+) -> dict:
+    """Everything an index depends on, as `Manifest` records it per video.
+
+    The raster is read from `frames` rather than taken as an argument because
+    nothing passes one: it is a constant of the embedding processor's input
+    size, and recording it is how a change to that constant reaches an index
+    already on disk.
+    """
+    return {
+        "win": win,
+        "stride": stride,
+        "frames_per_window": frames_per_window,
+        "frame_w": FRAME_W,
+        "frame_h": FRAME_H,
+        "backend": backend_name,
+    }
 
 
 def windows(duration: float, win: float = 8.0, stride: float = 4.0):
@@ -67,9 +94,9 @@ def index_pending(
     backend: EmbeddingBackend,
     use_asr: bool = True,
     asr_model: str = "small",
-    win: float = 8.0,
-    stride: float = 4.0,
-    frames_per_window: int = 8,
+    win: float = DEFAULT_WIN,
+    stride: float = DEFAULT_STRIDE,
+    frames_per_window: int = DEFAULT_FRAMES_PER_WINDOW,
     caption_backend: CaptionBackend | None = None,
     caption_dir=None,
     motion_store: MotionStore | None = None,
@@ -85,7 +112,8 @@ def index_pending(
         counts["captioned"] = 0
     if caption_backend is not None:
         caption_backend.preflight()
-    videos = manifest.pending()
+    settings = index_settings(backend.name, win, stride, frames_per_window)
+    videos = manifest.pending(settings)
     for i, row in enumerate(videos, 1):
         vid, path = row["id"], row["path"]
         t_start = time.time()
@@ -153,7 +181,7 @@ def index_pending(
             if motion_store is not None:
                 motion_store.delete_path(path)
                 motion_store.add(motion_rows)
-            manifest.mark_done(path, duration, backend.name)
+            manifest.mark_done(path, duration, settings)
             counts["indexed"] += 1
             counts["segments"] += len(rows)
             note = f" ({unreadable} unreadable skipped)" if unreadable else ""
