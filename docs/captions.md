@@ -36,7 +36,7 @@ The first version asked for 15-30 words and got paragraphs: *"Graffiti-covered c
 
 | | `mm index --caption` | A Claude Code session |
 | --- | --- | --- |
-| Pays with | `ANTHROPIC_API_KEY`, or your Claude subscription when that is unset (see Credentials) | Your Claude subscription |
+| Pays with | Your Claude subscription; `ANTHROPIC_API_KEY` only with `--allow-paid` and a budget (see Credentials) | Your Claude subscription |
 | Frames | the stills the rule above picks (two at the defaults), at the 456x256 extraction raster | identical |
 | Prompt | `PROMPT` in `captions.py` | paste the same text |
 | Output | `captions.csv` + the index | a CSV you place at `<folder>/captions.csv` |

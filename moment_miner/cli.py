@@ -51,9 +51,10 @@ def help_cmd(ctx, command):
 @click.option("--caption", default=None,
               help="Caption each segment with a Claude model (e.g. "
                    "claude-haiku-4-5) and add it to the searchable text. "
-                   "Spends session quota via Claude Code credentials, or "
-                   "money if only ANTHROPIC_API_KEY is set. Captions are "
-                   "cached beside the footage.")
+                   "Spends session quota via Claude Code credentials; "
+                   "ANTHROPIC_API_KEY spends money and needs --allow-paid "
+                   "with --paid-budget-usd. Captions are cached beside the "
+                   "footage.")
 @click.option("--allow-paid", is_flag=True, default=False,
               help="Permit the ANTHROPIC_API_KEY route, which spends money. "
                    "Refused without --paid-budget-usd.")
@@ -127,8 +128,9 @@ def _frame_size(ctx, param, value):
 @main.command()
 @click.argument("folder", type=click.Path(exists=True, file_okay=False))
 @click.option("--model", default="claude-haiku-4-5", show_default=True,
-              help="Claude model id, or 'mock'. Spends money; needs "
-                   "ANTHROPIC_API_KEY or Claude Code credentials.")
+              help="Claude model id, or 'mock'. Spends session quota via "
+                   "Claude Code credentials; ANTHROPIC_API_KEY is not used "
+                   "here.")
 @click.option("--backend", default="siglip", show_default=True,
               help="Which index to caption. The embedding model is not loaded.")
 @click.option("--frame-size", default="640x360", show_default=True,
