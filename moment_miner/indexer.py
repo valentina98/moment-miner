@@ -1,4 +1,7 @@
+import os
 import time
+from collections import defaultdict
+from pathlib import Path
 
 from .captions import (
     DEFAULT_FRAMES,
@@ -8,9 +11,10 @@ from .captions import (
     CaptionBackend,
     CaptionSidecar,
     frames_for_duration,
+    still_times,
 )
 from .embeddings.base import EmbeddingBackend
-from .frames import FRAME_H, FRAME_W, extract_windows
+from .frames import FRAME_H, FRAME_W, extract_stills, extract_windows
 from .manifest import Manifest
 from .motion import moving_fraction
 from .probe import probe
@@ -191,5 +195,84 @@ def index_pending(
             counts["errors"] += 1
             log(f"    ERROR: {e}")
     if counts["segments"]:
+        store.rebuild_fts()
+    return counts
+
+
+def caption_indexed(
+    manifest: Manifest,
+    store: SegmentStore,
+    caption_backend: CaptionBackend,
+    folder,
+    frame_w: int = 640,
+    frame_h: int = 360,
+    caption_dir=None,
+    caption_frames: int | None = None,
+    caption_frames_short: int | None = None,
+    caption_frames_long: int | None = None,
+    short_video_s: float = SHORT_VIDEO_S,
+    long_video_s: float = LONG_VIDEO_S,
+    force: bool = False,
+    log=print,
+) -> dict:
+    """Caption segments already in the store, without touching their vectors.
+
+    Captioning and embedding change on different cadences -- a new caption
+    model, prompt or raster should not cost a re-index -- so this reads the
+    spans indexing recorded and decodes only the stills it sends. That also
+    frees the raster: `index --caption` can only show the model the 456x256
+    frames decoded for the embedding.
+
+    A segment with a sidecar caption is not bought again unless `force`; its
+    cached caption is still written into the row, so an index built without
+    --caption picks up captions bought earlier.
+    """
+    caption_backend.preflight()
+    prefix = str(Path(folder).resolve()).rstrip(os.sep) + os.sep
+    by_path = defaultdict(list)
+    for r in store.segments():
+        if r["path"].startswith(prefix):
+            by_path[r["path"]].append(r)
+    counts = {"videos": 0, "captioned": 0, "reused": 0, "errors": 0}
+    for i, (path, rows) in enumerate(sorted(by_path.items()), 1):
+        log(f"[{i}/{len(by_path)}] {path} ({len(rows)} segments)")
+        recorded = manifest.recorded_settings(path)
+        stride = recorded["stride"] if recorded else DEFAULT_STRIDE
+        per_window = (recorded["frames_per_window"] if recorded
+                      else DEFAULT_FRAMES_PER_WINDOW)
+        # The last window always ends at the video's end (`windows`).
+        n_frames = frames_for_duration(
+            max(r["t1"] for r in rows), short=caption_frames_short,
+            normal=caption_frames, long=caption_frames_long,
+            short_video_s=short_video_s, long_video_s=long_video_s)
+        sidecar = CaptionSidecar(path, caption_dir)
+        sidecar.check_writable()
+        try:
+            for r in sorted(rows, key=lambda r: r["t0"]):
+                t0, t1 = r["t0"], r["t1"]
+                caption = None if force else sidecar.get(r["id"])
+                if caption is None:
+                    stills = extract_stills(
+                        path, still_times(t0, t1, stride, n_frames, per_window),
+                        frame_w, frame_h)
+                    if len(stills) == 0:
+                        log(f"    {r['id']}: no frames decoded, skipped")
+                        continue
+                    caption = caption_backend.caption(stills, t1 - t0, n_frames, stride)
+                    sidecar.put(r["id"], t0, t1, caption, caption_backend.name)
+                    counts["captioned"] += 1
+                else:
+                    counts["reused"] += 1
+                text = f"{manifest.transcript_between(r['video_id'], t0, t1)} {caption}".strip()
+                if text != r["text"]:
+                    store.set_text(r["id"], text)
+            counts["videos"] += 1
+        except Exception as e:
+            counts["errors"] += 1
+            log(f"    ERROR: {e}")
+        finally:
+            # Captions already paid for are kept even when a later one fails.
+            sidecar.flush()
+    if counts["captioned"] or counts["reused"]:
         store.rebuild_fts()
     return counts

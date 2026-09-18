@@ -16,8 +16,11 @@ from moment_miner.captions import (
     MockCaptionBackend,
     get_caption_backend,
     resolve_credentials,
+    still_times,
     subsample,
 )
+
+from .conftest import requires_ffmpeg
 
 
 def frames(n=8, h=48, w=64):
@@ -295,3 +298,120 @@ def test_indexer_without_caption_backend_spends_nothing(tmp_path, monkeypatch):
     assert "captioned" not in counts
     assert all(r["text"] == "spoken words" for r in store.rows)
     assert not (tmp_path / "captions.csv").exists()
+
+
+# --- the standalone pass over an existing index ---------------------------
+
+def test_still_times_are_the_instants_subsample_picks():
+    for span, n in ((8.0, None), (3.0, None), (6.0, None), (8.0, 5), (8.0, 1)):
+        picked = subsample(np.arange(8), span, 4.0, n)
+        times = still_times(10.0, 10.0 + span, 4.0, n, frames_per_window=8)
+        assert times == [10.0 + i * span / 8 for i in picked]
+
+
+class Recording(MockCaptionBackend):
+    name = "recording"
+
+    def __init__(self, text="kong vault over a rail"):
+        self.text, self.shapes = text, []
+
+    def caption(self, frames, span, n_frames=None, stride=4.0):
+        self.shapes.append(frames.shape)
+        return self.text
+
+
+class Refuses(MockCaptionBackend):
+    def caption(self, *a, **k):
+        raise AssertionError("bought a caption the sidecar already had")
+
+
+def _indexed(tmp_path, synthetic_video):
+    from moment_miner.embeddings.mock import MockBackend
+    from moment_miner.indexer import index_pending
+    from moment_miner.manifest import Manifest
+    from moment_miner.store import SegmentStore
+
+    manifest = Manifest(tmp_path / "data" / "manifest.db")
+    manifest.scan(synthetic_video.parent)
+    store = SegmentStore(tmp_path / "data", "mock")
+    index_pending(manifest, store, MockBackend(), use_asr=False, log=lambda *a: None)
+    return manifest, store
+
+
+@requires_ffmpeg
+def test_caption_pass_over_an_existing_index(tmp_path, synthetic_video):
+    from moment_miner.indexer import caption_indexed
+
+    manifest, store = _indexed(tmp_path, synthetic_video)
+    before = {r["id"]: list(map(float, r["vector"]))
+              for r in store.table.search().limit(100).to_list()}
+    assert store.text_search("kong") == []
+
+    be = Recording()
+    counts = caption_indexed(manifest, store, be, synthetic_video.parent,
+                             frame_w=200, frame_h=120, log=lambda *a: None)
+
+    assert counts["captioned"] == len(before) == 2
+    rows = store.table.search().limit(100).to_list()
+    assert all(r["text"] == "kong vault over a rail" for r in rows)
+    assert {r["id"]: list(map(float, r["vector"])) for r in rows} == before
+    assert {h["id"] for h in store.text_search("kong")} == set(before)
+    sidecar = CaptionSidecar(synthetic_video)
+    assert all(sidecar.get(i) == "kong vault over a rail" for i in before)
+
+
+@requires_ffmpeg
+def test_caption_pass_decodes_at_its_own_raster(tmp_path, synthetic_video):
+    from moment_miner.frames import FRAME_H, FRAME_W
+    from moment_miner.indexer import caption_indexed
+
+    manifest, store = _indexed(tmp_path, synthetic_video)
+    be = Recording()
+    caption_indexed(manifest, store, be, synthetic_video.parent,
+                    frame_w=200, frame_h=120, log=lambda *a: None)
+    assert (120, 200) != (FRAME_H, FRAME_W)
+    # 8 s windows at stride 4 take two stills each, at 2 s and 6 s.
+    assert be.shapes == [(2, 120, 200, 3)] * 2
+
+
+@requires_ffmpeg
+def test_caption_pass_skips_segments_the_sidecar_has(tmp_path, synthetic_video):
+    from moment_miner.indexer import caption_indexed
+
+    manifest, store = _indexed(tmp_path, synthetic_video)
+    caption_indexed(manifest, store, Recording(), synthetic_video.parent,
+                    log=lambda *a: None)
+    counts = caption_indexed(manifest, store, Refuses(), synthetic_video.parent,
+                             log=lambda *a: None)
+    assert counts["captioned"] == 0 and counts["reused"] == 2
+
+    forced = Recording("backflip off a wall")
+    counts = caption_indexed(manifest, store, forced, synthetic_video.parent,
+                             force=True, log=lambda *a: None)
+    assert counts["captioned"] == 2 and len(forced.shapes) == 2
+    assert len(store.text_search("backflip")) == 2
+    assert store.text_search("kong") == []
+
+
+@requires_ffmpeg
+def test_mm_caption_cli(tmp_path, synthetic_video):
+    from click.testing import CliRunner
+
+    from moment_miner.cli import main
+
+    _indexed(tmp_path, synthetic_video)
+    out = tmp_path / "captions-out"
+    result = CliRunner().invoke(main, [
+        "--data-dir", str(tmp_path / "data"), "caption", str(synthetic_video.parent),
+        "--model", "mock", "--backend", "mock", "--frame-size", "200x120",
+        "--caption-dir", str(out), "--caption-frames", "3",
+    ])
+    assert result.exit_code == 0, result.output
+    assert "'captioned': 2" in result.output
+    rows = list(csv.DictReader((out / "captions.csv").open()))
+    assert [r["caption"] for r in rows] == ["mock caption of 3 frames over 8.0s"] * 2
+
+    bad = CliRunner().invoke(main, [
+        "--data-dir", str(tmp_path / "data"), "caption", str(synthetic_video.parent),
+        "--model", "mock", "--backend", "mock", "--frame-size", "wide"])
+    assert bad.exit_code != 0 and "WxH" in bad.output

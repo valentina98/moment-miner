@@ -48,6 +48,7 @@ pollute the index.
 | `mm locate -q Q -v VIDEO` | where inside one video the action is (`--labels`/`--videos` to sweep a CSV, `--fps`, `--locator`, `--duration`, `--top`, `-o`) |
 | `mm annotate FOLDER` | interactive ground-truth labeling (`--template`) |
 | `mm eval LABELS.csv` | recall@k + MRR against hand labels |
+| `mm caption FOLDER` | caption already-indexed segments without re-embedding (`--model`, `--frame-size`, `--caption-frames`, `--force`) |
 | `mm caption-compare A.csv B.csv` | several caption sets as one blind judging page |
 | `mm export VIDEO T0 T1` | one clip (`--pad`, `--no-smart`, `--no-snap`) |
 | `mm serve` | resident HTTP search daemon (`/search`, `/health`) |
@@ -392,7 +393,8 @@ Hand labels are ground truth for `mm eval`. Captions are the other half:
 `mm index --caption claude-haiku-4-5` writes one sentence per segment into the
 searchable text, so silent footage is findable by word and not only by pixel
 similarity. Captions land in `<folder>/captions.csv` beside the footage and are
-reused on re-index. `mm caption-compare a.csv b.csv --videos <folder>` renders several caption sets
+reused on re-index. `mm caption <folder>` does the same for an index that
+already exists, without re-embedding it. `mm caption-compare a.csv b.csv --videos <folder>` renders several caption sets
 as one blind judging page, marking where the models disagree. Method, both
 routes, credentials and cost per hour:
 [docs/captions.md](docs/captions.md).

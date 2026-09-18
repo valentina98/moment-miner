@@ -134,11 +134,27 @@ def subsample(frames: np.ndarray, span: float = 8.0, stride: float = 4.0,
     (`sample_points`). An explicit n overrides that and spreads n frames evenly
     across the whole window instead.
     """
+    return frames[_pick(len(frames), span, stride, n)]
+
+
+def _pick(have: int, span: float, stride: float, n: int | None) -> list[int]:
     points = even_points(n) if n else sample_points(span, stride)
-    if len(frames) <= len(points):
-        return frames
-    idx = sorted({min(len(frames) - 1, int(p * len(frames))) for p in points})
-    return frames[idx]
+    if have <= len(points):
+        return list(range(have))
+    return sorted({min(have - 1, int(p * have)) for p in points})
+
+
+def still_times(t0: float, t1: float, stride: float = 4.0, n: int | None = None,
+                frames_per_window: int = 8) -> list[float]:
+    """The instants `subsample` would pick, for decoding them on their own.
+
+    `mm caption` has no embedding frames to pick from, so it seeks to the
+    positions those frames held instead: the same stills the index route
+    captions, at whatever raster the caption pass asks for.
+    """
+    span = t1 - t0
+    return [t0 + i * span / frames_per_window
+            for i in _pick(frames_per_window, span, stride, n)]
 
 
 def frames_for_duration(

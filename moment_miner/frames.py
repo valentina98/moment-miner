@@ -28,6 +28,28 @@ def extract_frames(
     return buf[: k * w * h * 3].reshape(k, h, w, 3)
 
 
+def extract_stills(path: str, times, w: int, h: int) -> np.ndarray:
+    """One RGB frame at each of `times` → (k, h, w, 3) uint8.
+
+    A seek per still rather than a pass over the span: a caption wants two or
+    three stills out of an 8 s window, and decoding the window at 4K is what
+    this exists to avoid. A time past the last frame yields nothing, so k can
+    be less than len(times).
+    """
+    size = w * h * 3
+    out = []
+    for t in times:
+        proc = subprocess.run(
+            [ffmpeg_exe(), "-v", "error", "-ss", f"{t:.3f}", "-i", path,
+             "-vf", f"scale={w}:{h}", "-frames:v", "1",
+             "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+            capture_output=True, check=True,
+        )
+        if len(proc.stdout) >= size:
+            out.append(np.frombuffer(proc.stdout[:size], np.uint8).reshape(h, w, 3))
+    return np.stack(out) if out else np.empty((0, h, w, 3), np.uint8)
+
+
 def _stream_frames(path: str, fps: float, w: int, h: int):
     """Yield (h, w, 3) frames from one sequential decode of the whole file."""
     proc = subprocess.Popen(

@@ -1,6 +1,6 @@
 # Captioning segments
 
-`mm index --caption <model>` writes one sentence per segment into the searchable text. This is what makes a silent clip findable by word.
+`mm index --caption <model>` writes one sentence per segment into the searchable text. This is what makes a silent clip findable by word. `mm caption FOLDER` does the same for segments already indexed, without re-embedding them.
 
 ## Why
 
@@ -60,7 +60,7 @@ Captioning is the only stage that spends anything — money on an API key, sessi
 
 ## What it costs
 
-Segments per hour of footage is `3600 / stride` — 900 at the default stride 4, and higher on an archive of short clips, whose truncated windows do not overlap (a 50-clip corpus measured 1086). Stills are sent at the 456x256 extraction raster — captioning reuses the frames decoded for the embedding and never upscales them — which is ~170 input tokens each (156 by `w x h / 750`, 170 by counting 28-pixel tiles; confirm with `count_tokens` before a bulk run). The prompt adds ~200 text tokens per segment, and ~30 output tokens come back.
+Segments per hour of footage is `3600 / stride` — 900 at the default stride 4, and higher on an archive of short clips, whose truncated windows do not overlap (a 50-clip corpus measured 1086). Under `mm index --caption`, stills are sent at the 456x256 extraction raster — captioning reuses the frames decoded for the embedding and never upscales them — which is ~170 input tokens each (156 by `w x h / 750`, 170 by counting 28-pixel tiles; confirm with `count_tokens` before a bulk run). `mm caption` at its default 640x360 sends ~307 by the same `w x h / 750` rule, so the table below understates its cost by roughly 1.5x. The prompt adds ~200 text tokens per segment, and ~30 output tokens come back.
 
 At 900 segments/hour and the two frames an ordinary segment yields: `900 x (2 x 170 + 200)` = 0.49 M input tokens, `900 x 30` = 0.027 M output. **Frame count is the main cost lever** — each extra still adds ~170 tokens to a ~540-token request, so forcing 5 frames costs roughly 1.7x what the rule's two do.
 
@@ -78,7 +78,11 @@ Prices read from Anthropic's model pricing 2026-06-24; re-check before a bulk ru
 mm index /videos --caption claude-haiku-4-5
 mm index /videos --caption claude-opus-5 --caption-frames-long 6
 make caption VIDEOS=footage CAPTION_MODEL=claude-haiku-4-5
+mm caption /videos --model claude-haiku-4-5 --frame-size 640x360
+make recaption VIDEOS=footage/src CAPTION_MODEL=claude-haiku-4-5 ARGS="--force"
 ```
+
+**Two routes.** `mm index --caption` captions while it indexes, from the frames it already decoded for the embedding, so the model never sees more than 456x256. `mm caption` is a separate pass over an index that already exists: it reads each segment's span from the store, seeks to the same instants `index --caption` would pick, decodes only those stills at `--frame-size` (default 640x360; anything wider than 640 px is downscaled before sending, `FRAME_WIDTH` in `captions.py`), then rewrites the row's `text` as transcript plus caption and rebuilds the FTS index. Vectors, schema and fusion are untouched, and the embedding model is never loaded. Use it when the caption model, prompt or raster changes and the embeddings have not — that no longer costs a re-index. Segments that already have a sidecar caption are not bought again, but the cached caption is still written into the row; `--force` buys a fresh one. Stride and frames-per-window are read from what the manifest recorded for each video.
 
 `make caption` exists because captions are written beside the footage: it mounts the archive read-write, where every other target mounts it `:ro`. Running `mm index --caption` against a read-only archive fails immediately, before the first paid request, rather than after. `--caption-dir` writes the sidecars elsewhere if the archive must stay read-only.
 

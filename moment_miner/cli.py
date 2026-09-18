@@ -104,6 +104,70 @@ def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex,
     click.echo(f"done: {result}")
 
 
+def _frame_size(ctx, param, value):
+    try:
+        w, h = (int(v) for v in value.lower().split("x"))
+    except ValueError:
+        raise click.BadParameter(f"expected WxH, e.g. 640x360; got {value!r}")
+    if w <= 0 or h <= 0:
+        raise click.BadParameter(f"both sides must be positive; got {value!r}")
+    return w, h
+
+
+@main.command()
+@click.argument("folder", type=click.Path(exists=True, file_okay=False))
+@click.option("--model", default="claude-haiku-4-5", show_default=True,
+              help="Claude model id, or 'mock'. Spends money; needs "
+                   "ANTHROPIC_API_KEY or Claude Code credentials.")
+@click.option("--backend", default="siglip", show_default=True,
+              help="Which index to caption. The embedding model is not loaded.")
+@click.option("--frame-size", default="640x360", show_default=True,
+              callback=_frame_size,
+              help="Raster the stills are decoded at, independent of the "
+                   "embedding's. Stills wider than 640 px are downscaled "
+                   "before sending.")
+@click.option("--caption-dir", default=None,
+              help="Write caption sidecars here instead of beside each video.")
+@click.option("--caption-frames", default=None, type=int,
+              help="Force the stills sent per segment. By default the count "
+                   "follows from the segment's span and the indexed stride.")
+@click.option("--caption-frames-short", default=None, type=int,
+              help="Force the count for short videos instead.")
+@click.option("--caption-frames-long", default=None, type=int,
+              help="Force the count for long videos instead.")
+@click.option("--short-video", "short_video_s", default=8.0, show_default=True)
+@click.option("--long-video", "long_video_s", default=120.0, show_default=True)
+@click.option("--force", is_flag=True,
+              help="Caption again even where the sidecar already has one.")
+@click.pass_obj
+def caption(data_dir, folder, model, backend, frame_size, caption_dir,
+            caption_frames, caption_frames_short, caption_frames_long,
+            short_video_s, long_video_s, force):
+    """Caption the already-indexed segments under FOLDER.
+
+    Reads the segments from the index instead of re-embedding, decodes only
+    the stills each caption needs, and rewrites the searchable text.
+    """
+    from .captions import get_caption_backend
+    from .indexer import caption_indexed
+
+    store = SegmentStore(data_dir, backend)
+    try:
+        result = caption_indexed(
+            Manifest(data_dir / "manifest.db"), store, get_caption_backend(model),
+            folder, frame_w=frame_size[0], frame_h=frame_size[1],
+            caption_dir=caption_dir, caption_frames=caption_frames,
+            caption_frames_short=caption_frames_short,
+            caption_frames_long=caption_frames_long,
+            short_video_s=short_video_s, long_video_s=long_video_s,
+            force=force, log=click.echo,
+        )
+    except RuntimeError as e:
+        # Missing credentials, a read-only archive, or no index yet.
+        raise click.ClickException(str(e)) from e
+    click.echo(f"done: {result}")
+
+
 @main.command("caption-compare")
 @click.argument("caption_files", nargs=-1, required=True,
                 type=click.Path(exists=True, dir_okay=False))
