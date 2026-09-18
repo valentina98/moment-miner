@@ -34,7 +34,7 @@ RUN = docker run --rm $(GPUS) \
 # read-write. Everything else keeps :ro.
 RUN_RW = $(subst :ro,,$(RUN))
 
-.PHONY: image dev-image test index caption search mine annotate eval serve shell
+.PHONY: image dev-image test index caption recaption search mine annotate eval serve shell
 
 image:
 	docker build --target runtime -t $(IMAGE) .
@@ -50,6 +50,10 @@ index: image
 
 caption: image
 	$(RUN_RW) $(IMAGE) index /videos/$(SUB) --caption $(CAPTION_MODEL)
+
+# Captions an index that already exists, without re-embedding it.
+recaption: image
+	$(RUN_RW) $(IMAGE) caption /videos/$(SUB) --model $(CAPTION_MODEL) $(ARGS)
 
 search: image
 	$(RUN) $(IMAGE) search "$(Q)" -k $(K) --llc-dir /data/llc

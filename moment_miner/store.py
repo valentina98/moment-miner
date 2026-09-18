@@ -57,6 +57,17 @@ class SegmentStore:
         if self.table_name in self._names():
             self.table.delete("path = '{}'".format(path.replace("'", "''")))
 
+    def segments(self) -> list[dict]:
+        """Every row without its vector, for passes that only need the spans."""
+        return (
+            self.table.search().select(COLUMNS)
+            .limit(max(self.count(), 1)).to_list()
+        )
+
+    def set_text(self, seg_id: str, text: str):
+        self.table.update(where="id = '{}'".format(seg_id.replace("'", "''")),
+                          values={"text": text})
+
     def rebuild_fts(self):
         self.table.create_index("text", config=FTS(), replace=True)
 
