@@ -191,25 +191,15 @@ def _encode(frame: np.ndarray) -> str:
 
 
 def _find_token(obj) -> str | None:
-    """Pull an OAuth access token out of the Claude Code credential file.
+    """The Claude subscription token from the Claude Code credential file, or None.
 
-    Walks the JSON rather than hard-coding a path into it: the file is written
-    by Claude Code, its shape is not part of any published contract, and this
-    must never read or log anything but the one value it needs.
+    Reads `claudeAiOauth.accessToken` and nothing else: the file also holds
+    other services' tokens under the same key name. If Claude Code ever moves
+    the entry, captioning should fail for want of credentials, not guess.
     """
-    if isinstance(obj, dict):
-        for k, v in obj.items():
-            if isinstance(v, str) and k.lower().replace("_", "") == "accesstoken":
-                return v
-            found = _find_token(v)
-            if found:
-                return found
-    elif isinstance(obj, list):
-        for v in obj:
-            found = _find_token(v)
-            if found:
-                return found
-    return None
+    entry = obj.get("claudeAiOauth") if isinstance(obj, dict) else None
+    token = entry.get("accessToken") if isinstance(entry, dict) else None
+    return token if isinstance(token, str) and token else None
 
 
 def resolve_credentials(env=None, config_dir=None, *, allow_paid: bool = False,
