@@ -15,17 +15,20 @@ PORT     ?= 7700
 CAPTION_MODEL ?= claude-haiku-4-5
 GPUS     ?=
 
-# Captioning takes either route: ANTHROPIC_API_KEY, or the Claude Code
-# subscription token that resolve_credentials() reads from .credentials.json.
-# The token route only works if the file is inside the container, so mount it
-# when it exists -- absent, this expands to nothing and the API key path is
-# unaffected.
-CREDS = $(wildcard $(HOME)/.claude/.credentials.json)
-CREDS_MOUNT = $(if $(CREDS),-v $(CREDS):/root/.claude/.credentials.json:ro,)
+# The subscription token reaches only `caption` and `recaption`, and never as
+# the credentials file itself: that file also holds refresh tokens and every MCP
+# server's OAuth token. The host copies the one value resolve_credentials()
+# reads, claudeAiOauth.accessToken, into a private temp file (or `{}` when there
+# is none, leaving the API key route to decide), mounts it read-only, and
+# deletes it however the run ends.
+CLAUDE_CREDS ?= $(HOME)/.claude/.credentials.json
+TOKEN_FILE = tok=$$(mktemp) && trap 'rm -f "$$tok"' EXIT && trap 'exit 130' INT TERM && \
+	python3 -c 'import json, os, sys; p = sys.argv[1]; e = (json.load(open(p)) if os.path.exists(p) else {}).get("claudeAiOauth") or {}; t = e.get("accessToken"); json.dump({"claudeAiOauth": {"accessToken": t}} if isinstance(t, str) and t else {}, sys.stdout)' \
+	"$(CLAUDE_CREDS)" > "$$tok" &&
+TOKEN_MOUNT = -v "$$tok":/root/.claude/.credentials.json:ro
 
 RUN = docker run --rm $(GPUS) \
 	-e ANTHROPIC_API_KEY \
-	$(CREDS_MOUNT) \
 	-v $(abspath $(VIDEOS)):/videos:ro \
 	-v mm-hf-cache:/root/.cache \
 	-v $(DATA):/data
@@ -49,11 +52,11 @@ index: image
 	$(RUN) $(IMAGE) index /videos/$(SUB) $(ARGS)
 
 caption: image
-	$(RUN_RW) $(IMAGE) index /videos/$(SUB) --caption $(CAPTION_MODEL)
+	$(TOKEN_FILE) $(RUN_RW) $(TOKEN_MOUNT) $(IMAGE) index /videos/$(SUB) --caption $(CAPTION_MODEL)
 
 # Captions an index that already exists, without re-embedding it.
 recaption: image
-	$(RUN_RW) $(IMAGE) caption /videos/$(SUB) --model $(CAPTION_MODEL) $(ARGS)
+	$(TOKEN_FILE) $(RUN_RW) $(TOKEN_MOUNT) $(IMAGE) caption /videos/$(SUB) --model $(CAPTION_MODEL) $(ARGS)
 
 search: image
 	$(RUN) $(IMAGE) search "$(Q)" -k $(K) --llc-dir /data/llc

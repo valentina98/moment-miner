@@ -46,9 +46,25 @@ def fake_client(text="a person vaults a rail in a concrete plaza"):
 
 # --- credential resolution: the three paths -------------------------------
 
+CLAUDE_CREDS = {"claudeAiOauth": {"accessToken": "oauth-value", "scopes": []}}
+# Another service's token, placed first in the file under the same key name.
+OTHER_CREDS = {"mcpOAuth": {"other|abc": {"accessToken": "not-claude"}}}
+
+
+def test_other_token_is_never_used(tmp_path):
+    (tmp_path / ".credentials.json").write_text(json.dumps({**OTHER_CREDS, **CLAUDE_CREDS}))
+    assert resolve_credentials(env={}, config_dir=tmp_path) == {"auth_token": "oauth-value"}
+
+
+def test_other_token_alone_is_no_credential(tmp_path):
+    (tmp_path / ".credentials.json").write_text(json.dumps(OTHER_CREDS))
+    with pytest.raises(MissingCaptionCredentials):
+        resolve_credentials(env={}, config_dir=tmp_path)
+
+
 def test_subscription_wins_over_api_key(tmp_path):
     """The free route is preferred: quota, not money, when both are available."""
-    (tmp_path / ".credentials.json").write_text('{"accessToken": "oauth-value"}')
+    (tmp_path / ".credentials.json").write_text(json.dumps(CLAUDE_CREDS))
     got = resolve_credentials(env={"ANTHROPIC_API_KEY": "sk-test"}, config_dir=tmp_path)
     assert got == {"auth_token": "oauth-value"}
 
@@ -79,9 +95,7 @@ def test_api_key_used_when_allowed_with_a_budget(tmp_path):
 
 
 def test_subscription_credentials_used_when_no_key(tmp_path):
-    (tmp_path / ".credentials.json").write_text(
-        json.dumps({"claudeAiOauth": {"accessToken": "oauth-value", "scopes": []}})
-    )
+    (tmp_path / ".credentials.json").write_text(json.dumps(CLAUDE_CREDS))
     assert resolve_credentials(env={}, config_dir=tmp_path) == {"auth_token": "oauth-value"}
 
 
@@ -93,7 +107,7 @@ def test_no_credentials_raises_naming_both(tmp_path):
 
 
 def test_oauth_route_sends_the_beta_header(tmp_path, monkeypatch):
-    (tmp_path / ".credentials.json").write_text('{"accessToken": "oauth-value"}')
+    (tmp_path / ".credentials.json").write_text(json.dumps(CLAUDE_CREDS))
     captured = {}
 
     class FakeAnthropic:

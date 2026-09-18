@@ -52,7 +52,7 @@ Use the session route to compare models or spot-check a handful of segments. Use
 
 Resolved in this order, once, when the first caption is requested. **Reordered 2026-09-18: the free route wins, and the paid one is refused unless it was asked for and capped.**
 
-1. Claude Code credentials at `$CLAUDE_CONFIG_DIR/.credentials.json` (default `~/.claude`), mounted into the container if you run in Docker — spends session quota, no money
+1. Claude Code's subscription token: `claudeAiOauth.accessToken` in `$CLAUDE_CONFIG_DIR/.credentials.json` (default `~/.claude`), and nothing else in that file, which also holds refresh tokens and MCP servers' tokens. Under Docker the file never enters the container: `make caption` and `make recaption` copy that one value into a temp file, mount it read-only and delete it afterwards, and no other target gets a token — spends session quota, no money
 2. `ANTHROPIC_API_KEY` — spends money, so it is used **only** with `--allow-paid` and `--paid-budget-usd` above zero. A key on its own, even with no subscription credentials present, raises rather than bills
 3. Neither — one error naming both, raised before any frame is sent
 
