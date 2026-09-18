@@ -43,9 +43,35 @@ def fake_client(text="a person vaults a rail in a concrete plaza"):
 
 # --- credential resolution: the three paths -------------------------------
 
-def test_api_key_wins(tmp_path):
+def test_subscription_wins_over_api_key(tmp_path):
+    """The free route is preferred: quota, not money, when both are available."""
     (tmp_path / ".credentials.json").write_text('{"accessToken": "oauth-value"}')
     got = resolve_credentials(env={"ANTHROPIC_API_KEY": "sk-test"}, config_dir=tmp_path)
+    assert got == {"auth_token": "oauth-value"}
+
+
+def test_api_key_refused_without_permission(tmp_path):
+    """A key alone is not consent: no subscription and no --allow-paid means stop."""
+    with pytest.raises(MissingCaptionCredentials) as e:
+        resolve_credentials(env={"ANTHROPIC_API_KEY": "sk-test"}, config_dir=tmp_path)
+    assert "--allow-paid" in str(e.value)
+
+
+def test_api_key_refused_without_a_budget(tmp_path):
+    with pytest.raises(MissingCaptionCredentials):
+        resolve_credentials(env={"ANTHROPIC_API_KEY": "sk-test"}, config_dir=tmp_path,
+                            allow_paid=True)
+
+
+def test_api_key_refused_on_a_zero_budget(tmp_path):
+    with pytest.raises(MissingCaptionCredentials):
+        resolve_credentials(env={"ANTHROPIC_API_KEY": "sk-test"}, config_dir=tmp_path,
+                            allow_paid=True, paid_budget_usd=0)
+
+
+def test_api_key_used_when_allowed_with_a_budget(tmp_path):
+    got = resolve_credentials(env={"ANTHROPIC_API_KEY": "sk-test"}, config_dir=tmp_path,
+                              allow_paid=True, paid_budget_usd=5.0)
     assert got == {"api_key": "sk-test"}
 
 

@@ -51,8 +51,15 @@ def help_cmd(ctx, command):
 @click.option("--caption", default=None,
               help="Caption each segment with a Claude model (e.g. "
                    "claude-haiku-4-5) and add it to the searchable text. "
-                   "Spends money; needs ANTHROPIC_API_KEY or Claude Code "
-                   "credentials. Captions are cached beside the footage.")
+                   "Spends session quota via Claude Code credentials, or "
+                   "money if only ANTHROPIC_API_KEY is set. Captions are "
+                   "cached beside the footage.")
+@click.option("--allow-paid", is_flag=True, default=False,
+              help="Permit the ANTHROPIC_API_KEY route, which spends money. "
+                   "Refused without --paid-budget-usd.")
+@click.option("--paid-budget-usd", type=float, default=None,
+              help="The cap you accept for this pass, in USD. Required by "
+                   "--allow-paid; a gate before the first request, not a meter.")
 @click.option("--caption-dir", default=None,
               help="Write caption sidecars here instead of beside each video "
                    "(use when the archive is mounted read-only).")
@@ -72,8 +79,9 @@ def help_cmd(ctx, command):
               help="A video at least this many seconds counts as long.")
 @click.pass_obj
 def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex,
-          caption, caption_dir, caption_frames, caption_frames_short,
-          caption_frames_long, short_video_s, long_video_s):
+          caption, allow_paid, paid_budget_usd, caption_dir, caption_frames,
+          caption_frames_short, caption_frames_long, short_video_s,
+          long_video_s):
     """Scan FOLDER recursively and index new/changed videos."""
     from .captions import MissingCaptionCredentials, get_caption_backend
     from .embeddings import get_backend
@@ -91,7 +99,9 @@ def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex,
             manifest, store, be, use_asr=asr, asr_model=asr_model,
             motion_store=MotionStore(data_dir),
             win=window, stride=stride, log=click.echo,
-            caption_backend=get_caption_backend(caption) if caption else None,
+            caption_backend=get_caption_backend(
+                caption, allow_paid=allow_paid,
+                paid_budget_usd=paid_budget_usd) if caption else None,
             caption_dir=caption_dir,
             caption_frames=caption_frames,
             caption_frames_short=caption_frames_short,

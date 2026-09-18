@@ -56,7 +56,7 @@ def windows(duration: float, win: float = 8.0, stride: float = 4.0):
     spans under a stride. An unguarded forward walk emitted a segment wherever
     any video remained, so a 4.04 s clip produced a second segment covering
     4.00-4.04: forty milliseconds, indexed and searchable as a full row, and
-    paid for by a caption pass. Measured 2026-09-06, a third of the local index
+    captioned at full price by a caption pass. Measured 2026-09-06, a third of the local index
     and 40% of footage/cuts/ were such fragments, each a duplicate of the tail
     before it.
 

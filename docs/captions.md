@@ -18,7 +18,7 @@ They are separate files on purpose. **Captions are machine-written indexed conte
 
 Columns: `id,t0,t1,caption,model,written`.
 
-Captions are read back on the next pass. Re-indexing a folder — including `--reindex` — reuses the captions already on disk and only pays for segments that don't have one. This is why they live next to the footage rather than in `mm_data`: a caption costs money, and a deleted volume means a re-index, not a re-purchase.
+Captions are read back on the next pass. Re-indexing a folder — including `--reindex` — reuses the captions already on disk and only spends on segments that don't have one. This is why they live next to the footage rather than in `mm_data`: a caption costs session quota (money only on the API-key route), and a deleted volume means a re-index, not a second caption pass.
 
 ## The method
 
@@ -50,11 +50,13 @@ Use the session route to compare models or spot-check a handful of segments. Use
 
 ## Credentials
 
-Resolved in this order, once, when the first caption is requested:
+Resolved in this order, once, when the first caption is requested. **Reordered 2026-09-18: the free route wins, and the paid one is refused unless it was asked for and capped.**
 
-1. `ANTHROPIC_API_KEY`
-2. Claude Code credentials at `$CLAUDE_CONFIG_DIR/.credentials.json` (default `~/.claude`), mounted into the container if you run in Docker
+1. Claude Code credentials at `$CLAUDE_CONFIG_DIR/.credentials.json` (default `~/.claude`), mounted into the container if you run in Docker — spends session quota, no money
+2. `ANTHROPIC_API_KEY` — spends money, so it is used **only** with `--allow-paid` and `--paid-budget-usd` above zero. A key on its own, even with no subscription credentials present, raises rather than bills
 3. Neither — one error naming both, raised before any frame is sent
+
+The budget is a gate, not a meter: it is checked before the first request and nothing counts dollars as the pass runs. Metering is a next step, not a feature this claims.
 
 Captioning is the only stage that spends anything — money on an API key, session quota on a subscription. `mm index` without `--caption` needs no credentials at all.
 

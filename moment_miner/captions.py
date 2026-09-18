@@ -196,47 +196,68 @@ def _find_token(obj) -> str | None:
     return None
 
 
-def resolve_credentials(env=None, config_dir=None) -> dict:
-    """API key first, then Claude Code subscription credentials.
+def resolve_credentials(env=None, config_dir=None, *, allow_paid: bool = False,
+                       paid_budget_usd: float | None = None) -> dict:
+    """The free route, or the paid one only when it was asked for and capped.
 
-    Returns kwargs for anthropic.Anthropic(). An API key is the supported route
-    for a bulk pass; subscription credentials exist for Claude Code, so treat
-    that route as the convenience path it is.
+    Returns kwargs for anthropic.Anthropic(). The subscription token spends
+    session quota; ANTHROPIC_API_KEY spends money. So the token wins whenever it
+    exists, and the key is used only when the caller both allows it and states a
+    positive budget -- Valya's rule, 2026-09-18: the paid route stays available
+    but is never reached by default. Until that day the order was reversed, and
+    a key exported for any other reason was enough to turn a caption pass paid;
+    the Makefile passes `-e ANTHROPIC_API_KEY` straight into the container.
+
+    The budget is a gate, not a meter: nothing here counts dollars as the pass
+    runs. Metering is a separate piece of work, recorded as a next step.
     """
     env = os.environ if env is None else env
-    key = env.get("ANTHROPIC_API_KEY")
-    if key:
-        return {"api_key": key}
     base = Path(config_dir or env.get("CLAUDE_CONFIG_DIR") or (Path.home() / ".claude"))
     cred = base / ".credentials.json"
     if cred.exists():
         token = _find_token(json.loads(cred.read_text()))
         if token:
             return {"auth_token": token}
+    key = env.get("ANTHROPIC_API_KEY")
+    if key:
+        if allow_paid and paid_budget_usd is not None and paid_budget_usd > 0:
+            return {"api_key": key}
+        raise MissingCaptionCredentials(
+            "ANTHROPIC_API_KEY is set but the paid route is refused: it needs "
+            "--allow-paid AND --paid-budget-usd above 0 (got "
+            f"allow_paid={allow_paid!r}, paid_budget_usd={paid_budget_usd!r}). "
+            f"The free route is Claude Code credentials at {cred} -- sign in, or "
+            "mount that file into the container."
+        )
     raise MissingCaptionCredentials(
-        "no captioning credentials: set ANTHROPIC_API_KEY, or sign in to Claude "
-        f"Code so that {cred} exists (mount it into the container). "
-        "Captioning is the only stage that spends money; indexing without "
-        "--caption needs neither."
+        f"no captioning credentials: sign in to Claude Code so that {cred} "
+        "exists (mount it into the container). ANTHROPIC_API_KEY is the paid "
+        "alternative and needs --allow-paid with a budget. Captioning is the "
+        "only stage that needs either; indexing without --caption needs neither."
     )
 
 
 class ClaudeCaptionBackend(CaptionBackend):
     """Hosted Claude. One request per segment, three stills per request."""
 
-    def __init__(self, model: str, max_tokens: int = 200, client=None, env=None):
+    def __init__(self, model: str, max_tokens: int = 200, client=None, env=None,
+                 allow_paid: bool = False, paid_budget_usd: float | None = None):
         self.name = model
         self.model = model
         self.max_tokens = max_tokens
         self._client = client
         self._env = env
+        self._allow_paid = allow_paid
+        self._paid_budget_usd = paid_budget_usd
 
     @property
     def client(self):
         if self._client is None:
             import anthropic
 
-            kwargs = resolve_credentials(env=self._env)
+            kwargs = resolve_credentials(
+                env=self._env, allow_paid=self._allow_paid,
+                paid_budget_usd=self._paid_budget_usd)
             if "auth_token" in kwargs:
                 kwargs["default_headers"] = {"anthropic-beta": "oauth-2025-04-20"}
             self._client = anthropic.Anthropic(**kwargs)
@@ -286,9 +307,10 @@ class CaptionSidecar:
     `mm eval` reads — but captions are machine-written indexed content and
     labels are human-checked ground truth, so they stay separate files.
 
-    A caption costs money and an index does not survive a deleted mm_data
-    volume, so captions are written next to the video and read back on the next
-    pass: re-indexing the same folder re-uses them instead of buying them again.
+    A caption spends session quota (money, on the API-key route) and an index
+    does not survive a deleted mm_data volume, so captions are written next to
+    the video and read back on the next pass: re-indexing the same folder
+    re-uses them instead of spending for them again.
     """
 
     def __init__(self, video_path: str | Path, caption_dir: str | Path | None = None):
@@ -312,7 +334,7 @@ class CaptionSidecar:
         self._dirty = True
 
     def check_writable(self) -> None:
-        """Fail before the first paid request, not after.
+        """Fail before the first caption request, not after.
 
         The Makefile mounts the archive read-only, which is right for every
         other command and wrong for this one — `make caption` mounts it rw.
