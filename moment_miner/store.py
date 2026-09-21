@@ -5,6 +5,7 @@ import numpy as np
 from lancedb.index import FTS
 
 COLUMNS = ["id", "video_id", "path", "t0", "t1", "text"]
+AXIS_COLUMNS = ["action", "who", "scene", "light"]
 
 
 class SegmentStore:
@@ -91,6 +92,65 @@ class SegmentStore:
         if self.table_name not in self._names():
             return 0
         return self.table.count_rows()
+
+
+class AxisStore:
+    """The caption's axes, one row per segment.
+
+    Its own table for the same reason as `MotionStore`: the axes are a property
+    of the captions, not of the embedding, so keeping them in
+    `segments_<backend>` would store them once per backend and make adding an
+    axis rewrite the table holding the vectors. Here an axis can be added,
+    recomputed or dropped on its own, and no re-index is needed to gain one.
+
+    The joined caption still goes into the segment row's `text`, because that
+    is what the full-text index reads. This table is what a per-axis query
+    needs: a search constrains the axes it names, and `who = nobody` is a
+    filter, not a phrase to match.
+    """
+
+    TABLE = "axes"
+
+    def __init__(self, data_dir: str | Path):
+        self.db = lancedb.connect(str(Path(data_dir) / "lance"))
+
+    def _exists(self) -> bool:
+        return self.TABLE in list(self.db.list_tables().tables)
+
+    def add(self, rows: list[dict]):
+        if not rows:
+            return
+        if self._exists():
+            (
+                self.db.open_table(self.TABLE)
+                .merge_insert("id")
+                .when_matched_update_all()
+                .when_not_matched_insert_all()
+                .execute(rows)
+            )
+        else:
+            self.db.create_table(self.TABLE, rows)
+
+    def delete_path(self, path: str):
+        if self._exists():
+            self.db.open_table(self.TABLE).delete(
+                "path = '{}'".format(path.replace("'", "''")))
+
+    def all(self) -> list[dict]:
+        if not self._exists():
+            return []
+        return self.db.open_table(self.TABLE).search().limit(0).to_list()
+
+    def get(self, ids: list[str]) -> dict[str, dict]:
+        """Axes by segment id. Ids with no row are simply absent."""
+        if not ids or not self._exists():
+            return {}
+        quoted = ", ".join("'{}'".format(i.replace("'", "''")) for i in ids)
+        rows = (
+            self.db.open_table(self.TABLE)
+            .search().where(f"id IN ({quoted})").limit(len(ids)).to_list()
+        )
+        return {r["id"]: {k: r[k] for k in AXIS_COLUMNS} for r in rows}
 
 
 class MotionStore:
