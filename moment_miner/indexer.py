@@ -180,7 +180,14 @@ def index_pending(
             if not rows:
                 raise RuntimeError(f"no readable windows ({unreadable} failed)")
             if sidecar is not None:
+                sidecar.vote()
                 sidecar.flush()
+                for row in rows:
+                    voted = sidecar.get(row["id"])
+                    if voted is not None:
+                        spoken = manifest.transcript_between(
+                            row["video_id"], row["t0"], row["t1"])
+                        row["text"] = f"{spoken} {joined(voted)}".strip()
             store.delete_path(path)
             store.add(rows)
             if motion_store is not None:
@@ -273,7 +280,18 @@ def caption_indexed(
             log(f"    ERROR: {e}")
         finally:
             # Captions already paid for are kept even when a later one fails.
+            sidecar.vote()
             sidecar.flush()
+            # The vote can change rows already written, so the store is
+            # refreshed from the sidecar rather than from the per-segment pass.
+            for r in rows:
+                voted = sidecar.get(r["id"])
+                if voted is None:
+                    continue
+                text = (f"{manifest.transcript_between(r['video_id'], r['t0'], r['t1'])} "
+                        f"{joined(voted)}").strip()
+                if text != r["text"]:
+                    store.set_text(r["id"], text)
     if counts["captioned"] or counts["reused"]:
         store.rebuild_fts()
     return counts

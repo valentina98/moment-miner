@@ -16,6 +16,7 @@ import io
 import json
 import os
 from abc import ABC, abstractmethod
+from collections import Counter
 from datetime import date
 from importlib.resources import files as pkg_files
 from pathlib import Path
@@ -84,6 +85,25 @@ def _light(value: str) -> str:
     if v in LIGHTS:
         return v
     return next((L for L in LIGHTS if v and (v in L or L.startswith(v))), UNKNOWN)
+
+
+# Axes that are a property of the clip, not of the window: a take does not
+# change its lighting, and it rarely changes location. Asking per window means
+# re-guessing a constant, and the guesses disagreed on 3 of 15 clips.
+CLIP_AXES = ("scene", "light")
+
+
+def vote_clip_axes(rows: list[dict]) -> dict[str, str]:
+    """The value each clip-level axis should carry, by plurality of its windows.
+
+    `unclear` never wins: it is an abstention, so it is only the answer when a
+    clip has nothing else to offer.
+    """
+    out = {}
+    for axis in CLIP_AXES:
+        counts = Counter(r[axis] for r in rows if r.get(axis) and r[axis] != UNKNOWN)
+        out[axis] = counts.most_common(1)[0][0] if counts else UNKNOWN
+    return out
 
 
 def joined(axes: dict[str, str]) -> str:
@@ -442,6 +462,19 @@ class CaptionSidecar:
                 "The archive is mounted read-only — use `make caption`, which mounts "
                 "it read-write, or pass --caption-dir."
             ) from e
+
+    def vote(self) -> None:
+        """Collapse the clip-level axes, per video, over the rows held here."""
+        by_video: dict[str, list[dict]] = {}
+        for row in self.rows.values():
+            by_video.setdefault(row["id"].split(":")[0], []).append(row)
+        for rows in by_video.values():
+            won = vote_clip_axes(rows)
+            for row in rows:
+                if any(row[a] != won[a] for a in CLIP_AXES):
+                    row.update(won)
+                    row["caption"] = joined(row)
+                    self._dirty = True
 
     def flush(self) -> None:
         if not self._dirty:

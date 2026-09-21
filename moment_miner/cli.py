@@ -23,6 +23,12 @@ def main(ctx, data_dir):
     ctx.obj = Path(data_dir)
 
 
+def _ranker_names() -> list[str]:
+    from .rankers import ranker_names
+
+    return ranker_names()
+
+
 def _prompt_names() -> list[str]:
     from .captions import prompt_names
 
@@ -600,3 +606,55 @@ def locate(query, video, labels, videos, fps, locator_name, duration, top_k, bac
             "__META__", jsonlib.dumps({"fps": fps, "locator": locator_name,
                                        "duration": duration, "backend": be.name})))
         click.echo(f"wrote {out} ({len(panels)} panel(s))")
+
+
+@main.command(
+    epilog="Rankers: " + ", ".join(_ranker_names()))
+@click.argument("prompts", type=click.Path(exists=True, dir_okay=False))
+@click.option("--captions", "captions_path", required=True,
+              type=click.Path(exists=True, dir_okay=False),
+              help="A captions.csv written by `mm caption`.")
+@click.option("--axis", default="caption", show_default=True,
+              type=click.Choice(["caption", "action", "who", "scene", "light"]),
+              help="Which axis each prompt is scored against.")
+@click.option("--ranker", default="mock", show_default=True,
+              help="How to score. See the list below.")
+@click.option("-k", default=5, show_default=True, help="Hits shown per prompt.")
+@click.option("--backend", default="siglip", show_default=True,
+              help="Which index to read video names from.")
+@click.pass_obj
+def probe(data_dir, prompts, captions_path, axis, ranker, k, backend):
+    """Run a file of free-form prompts against a caption set.
+
+    `mm eval` scores the label set, which has ground truth and twelve rows.
+    This answers the other question — whether the words you would actually
+    type find the moment — and it has no ground truth, so it prints hits to
+    read rather than a number to quote.
+    """
+    import csv as _csv
+
+    from .rankers import get_ranker
+
+    rows = list(_csv.DictReader(open(captions_path, newline="")))
+    if not rows:
+        raise click.ClickException(f"no captions in {captions_path}")
+    # A segment id is a hash, which answers nothing on its own. The index
+    # knows which file it came from, so a hit names a video you can open.
+    try:
+        names = {s["id"]: Path(s["path"]).name
+                 for s in SegmentStore(data_dir, backend).segments()}
+    except Exception:
+        names = {}
+    try:
+        r = get_ranker(ranker)
+    except ValueError as e:
+        raise click.UsageError(str(e)) from e
+    queries = [q.strip() for q in open(prompts)
+               if q.strip() and not q.startswith("#")]
+    for q in queries:
+        click.echo(f"\n{q}")
+        for hit in r.top(q, rows, k=k, axis=axis):
+            where = names.get(hit["id"], hit["id"].split(":")[0])
+            click.echo(f"  {hit['score']:.3f}  {where} "
+                       f"{float(hit['t0']):.0f}-{float(hit['t1']):.0f}s  "
+                       f"{hit.get(axis, '')}")

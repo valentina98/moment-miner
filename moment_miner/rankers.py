@@ -20,8 +20,15 @@ class Ranker(ABC):
     def score(self, query: str, texts: list[str]) -> list[float]:
         """One score per text, in the order given."""
 
-    def top(self, query: str, rows: list[dict], k: int = 5) -> list[dict]:
-        scores = self.score(query, [r.get("text") or "" for r in rows])
+    def top(self, query: str, rows: list[dict], k: int = 5,
+            axis: str = "caption") -> list[dict]:
+        """Rank `rows` for `query`, reading one axis of each row.
+
+        The axis is the whole point: a query constrains what it names, and the
+        clip-level axes repeat across every window of a clip, so scoring the
+        joined caption drowns the one part that varies.
+        """
+        scores = self.score(query, [r.get(axis) or "" for r in rows])
         ranked = sorted(zip(rows, scores), key=lambda p: p[1], reverse=True)
         return [dict(r, score=s) for r, s in ranked[:k]]
 
