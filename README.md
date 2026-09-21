@@ -1,8 +1,14 @@
 # Moment Miner
 
-Search large video archives (parkour / sports / event footage) with natural
-language, get back exact ranked timestamps, and export the moments as lossless
-clips. No AI-edited output — the source files are never re-encoded.
+Search any large video archive with natural language, get back exact ranked
+timestamps, and export the moments as lossless clips. No AI-edited output —
+the source files are never re-encoded.
+
+Nothing in the tool is specific to one kind of footage. The worked examples
+below search a parkour archive, because that is what it was built and
+measured against; sports, events, talks, travel and family archives work the
+same way, and `mm annotate` ships label templates for several of them. Read
+"kong vault" throughout as "whatever you would type".
 
 ## Quickstart
 
@@ -223,7 +229,7 @@ pip install -r requirements-dev.txt
 | Data locality | footage never leaves your machines | upload TBs to their cloud | frames go to Google |
 | Quality | good baseline; VLM rerank tier planned | best-in-class out of the box | strong |
 | Search-by-example | native (same embedding space) | supported | limited |
-| Custom taxonomy (kong vs dash vault) | prototype vectors + linear probe on your labels | no | no |
+| Custom taxonomy (e.g. kong vs dash vault) | prototype vectors + linear probe on your labels | no | no |
 | Effort | you run the pipeline | trivial | low |
 
 Reference projects studied (cloned under `refs/`, git-ignored):
@@ -289,8 +295,9 @@ off.
       ingest option), confidence scores, descriptions
 - [ ] **M2** — search-by-example + prototype move classes, minimal web UI
   - [x] smart cut: frame-accurate export, via the `smartcut` package
-- [ ] **M3** — feedback capture → linear probe for parkour move taxonomy,
-      highlight scoring (audio salience + VLM judge)
+- [ ] **M3** — feedback capture → linear probe for a custom class taxonomy
+      (parkour moves as the worked example), highlight scoring (audio
+      salience + VLM judge)
 
 ## Search daemon
 
