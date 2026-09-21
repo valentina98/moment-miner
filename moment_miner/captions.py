@@ -17,6 +17,7 @@ import json
 import os
 from abc import ABC, abstractmethod
 from datetime import date
+from importlib.resources import files as pkg_files
 from pathlib import Path
 
 import numpy as np
@@ -37,20 +38,31 @@ SHORT_VIDEO_S = 8.0
 LONG_VIDEO_S = 120.0
 FRAME_WIDTH = 640
 
-PROMPT = """These {n} images are one {span:.0f}-second video segment, sampled across it in time order.
+DEFAULT_PROMPT = "general"
 
-Write ONE label of 10 to 20 words — what someone would type into a search box to find this clip again, not a description of the picture.
 
-Four parts, comma-separated, in this order:
+def prompt_names() -> list[str]:
+    tdir = pkg_files("moment_miner") / "templates"
+    return sorted(f.name[len("caption_"):-len(".txt")]
+                  for f in tdir.iterdir() if f.name.startswith("caption_"))
 
-- The action, named as a move rather than as someone doing it: "vault over a rail", not "person vaulting over rail".
-- Who is in it, in a word or two: "one person", "two men", "a group", "nobody", "with a dog".
-- The surroundings, concrete enough to search by: "parkour park with rails", not "outdoors".
-- The light, only if one of these six fits: sunny, overcast, dusk, night, floodlit, indoors. If none fits, end after the surroundings.
 
-Plain, common words: "bar", not "horizontal calisthenics apparatus". No sentences, no framing, no comment on the shot itself. Name only what you can see — if the subject is too small or unclear, write "unclear subject" and then only what is certain. If nothing happens, name the scene: "empty skatepark".
+def load_prompt(name_or_path: str = DEFAULT_PROMPT) -> str:
+    """A shipped prompt by name, or any file by path.
 
-Reply with the label alone, no preamble and no quotes."""
+    The prompt is a template, not a constant: what a caption names decides
+    what can be searched, and that differs per corpus. `general` is the one
+    to copy when writing your own.
+    """
+    path = Path(name_or_path)
+    if path.suffix and path.exists():
+        return path.read_text(encoding="utf-8")
+    shipped = pkg_files("moment_miner") / "templates" / f"caption_{name_or_path}.txt"
+    if not shipped.is_file():
+        raise ValueError(f"unknown caption prompt: {name_or_path!r} "
+                         f"(shipped: {', '.join(prompt_names())}, or give a file path)")
+    return shipped.read_text(encoding="utf-8")
+
 
 
 class MissingCaptionCredentials(RuntimeError):
@@ -250,9 +262,11 @@ class ClaudeCaptionBackend(CaptionBackend):
     """Hosted Claude. One request per segment, three stills per request."""
 
     def __init__(self, model: str, max_tokens: int = 200, client=None, env=None,
-                 allow_paid: bool = False, paid_budget_usd: float | None = None):
+                 allow_paid: bool = False, paid_budget_usd: float | None = None,
+                 prompt: str = DEFAULT_PROMPT):
         self.name = model
         self.model = model
+        self.prompt = load_prompt(prompt)
         self.max_tokens = max_tokens
         self._client = client
         self._env = env
@@ -283,7 +297,8 @@ class ClaudeCaptionBackend(CaptionBackend):
              "source": {"type": "base64", "media_type": "image/jpeg", "data": _encode(f)}}
             for f in picked
         ]
-        content.append({"type": "text", "text": PROMPT.format(n=len(picked), span=span)})
+        content.append({"type": "text",
+                        "text": self.prompt.format(n=len(picked), span=span)})
         response = self.client.messages.create(
             model=self.model,
             max_tokens=self.max_tokens,

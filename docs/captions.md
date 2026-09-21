@@ -28,7 +28,7 @@ Captions are read back on the next pass. Re-indexing a folder — including `--r
 
 These tiers were reasoned about at stride 4 and do not adapt to another one — at stride 2 a full window would yield four frames instead of two, and frames are the dominant cost of a pass. `--caption-frames` forces a count and overrides the rule; `--caption-frames-short` / `--caption-frames-long` do the same per video length.
 
-**Prompt.** The `PROMPT` constant in `moment_miner/captions.py` is the single source of truth. It asks for a **label of 10 to 20 words, not a description**, in the plain words someone would type into a search box — "kong vault over a rail, two men, concrete plaza beside stairs, dusk". Sentences, framing ("a video showing"), and commentary on the shot are all banned, and a subject too small to identify must be called unclear rather than guessed. What the label names, and why those things and not others, is the next section.
+**Prompt.** The `PROMPT` constant in `moment_miner/captions.py` is the single source of truth. It asks for a **label of 10 to 20 words, not a description**, in the plain words someone would type into a search box — "cutting the cake, two people, church hall with wooden beams, indoors". Sentences, framing ("a video showing"), and commentary on the shot are all banned, and a subject too small to identify must be called unclear rather than guessed. What the label names, and why those things and not others, is the next section.
 
 A longer budget turns the label into a description: *"Graffiti-covered concrete river embankment under a road bridge, people leaning on the railing above, green water and wooded hillside; the static shot barely changes."* Nobody types that, and against a BM25 index the extra words dilute the terms that matter.
 
@@ -39,11 +39,13 @@ A longer budget turns the label into a description: *"Graffiti-covered concrete 
 | Axis | Why it is in |
 | --- | --- |
 | Action | The thing searched for, almost always. It leads, so its words carry the most weight. |
-| Who is in the shot | Counts discriminate — a pair sitting on steps is not a solo vault. A word or two. |
+| Who is in the shot | Counts discriminate — two people talking is not one person working. A word or two. |
 | Surroundings | Named concretely. "Outdoors" alone is what makes many clips from one session read alike. |
 | Light | Cheap, visibly varies, not recoverable from metadata. |
 
 Three things are left out on purpose. **Outcome** — clean landing, bail, slip — because a handful of stills cannot show a stumble, so asking for it invites an invented one. **Shot type**, as the least certain thing to read off stills. **Who someone is, by name**: a vision model should not guess identity, so names belong in a file beside the footage, joined into the segment's text the way a transcript is.
+
+**The prompt is a template, and two ship.** They live in `moment_miner/templates/` as `caption_<name>.txt` and are chosen with `--caption-prompt`, which also takes a path to your own. `general` is the one to copy: it names the four axes with examples from no particular world. `parkour` is a worked example of the same template tuned to one corpus, and it shows what tuning is for — on parkour footage filmed at a skate spot, the general prompt returns "skateboarding", "wheelie" and "bicycle stunt", while the tuned one returns vaults and wall runs from the same stills. A prompt is a template because what a caption names decides what can be searched, and that differs per corpus.
 
 **What the index already measures exactly does not belong in a label.** Static-vs-moving, frame rate, duration and date are numbers, held in the motion table and the probe metadata; a caption guessing "static shot" duplicates a measurement and spends words doing it. Those are filters — the label is for what only a reader of the frames can say.
 
