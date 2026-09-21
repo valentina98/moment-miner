@@ -17,6 +17,9 @@ def probe(path: str) -> dict:
     a = next((s for s in info["streams"] if s["codec_type"] == "audio"), None)
     return {
         "duration": float(info["format"].get("duration") or v.get("duration") or 0),
+        # When the camera was set. Reported, never depended on: a camera with
+        # an unset clock writes a wrong time rather than none.
+        "shot_at": (info["format"].get("tags") or {}).get("creation_time"),
         "width": v.get("width"),
         "height": v.get("height"),
         "codec": v.get("codec_name"),

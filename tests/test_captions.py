@@ -18,7 +18,10 @@ from moment_miner.captions import (
     resolve_credentials,
     still_times,
     subsample,
+    LIGHTS,
+    joined,
     load_prompt,
+    parse_axes,
     prompt_names,
 )
 
@@ -133,7 +136,8 @@ def test_caption_sends_the_stills_the_rule_asks_for_and_returns_text():
     client = fake_client()
     be = ClaudeCaptionBackend("claude-haiku-4-5", client=client)
     out = be.caption(frames(8), span=8.0, stride=4.0)
-    assert out == "a person vaults a rail in a concrete plaza"
+    assert joined(out) == "a person vaults a rail in a concrete plaza, unclear, unclear, unclear"
+    assert out["action"] == "a person vaults a rail in a concrete plaza"
     content = client.messages.calls[0]["messages"][0]["content"]
     assert sum(1 for b in content if b["type"] == "image") == 2
     assert content[-1]["type"] == "text"
@@ -233,22 +237,23 @@ def test_sidecar_writes_next_to_the_video(tmp_path):
     video = tmp_path / "clips" / "a.mp4"
     video.parent.mkdir()
     sc = CaptionSidecar(video)
-    sc.put("a:0.0", 0.0, 8.0, "a caption", "claude-haiku-4-5")
+    sc.put("a:0.0", 0.0, 8.0, parse_axes("a caption"), "claude-haiku-4-5")
     sc.flush()
     written = video.parent / "captions.csv"
     assert written.exists()
     rows = list(csv.DictReader(written.open()))
     assert rows[0]["id"] == "a:0.0"
-    assert rows[0]["caption"] == "a caption"
+    assert rows[0]["action"] == "a caption"
+    assert rows[0]["caption"] == "a caption, unclear, unclear, unclear"
     assert rows[0]["model"] == "claude-haiku-4-5"
 
 
 def test_sidecar_is_read_back_so_captions_are_not_bought_twice(tmp_path):
     video = tmp_path / "a.mp4"
     sc = CaptionSidecar(video)
-    sc.put("a:0.0", 0.0, 8.0, "cached", "claude-haiku-4-5")
+    sc.put("a:0.0", 0.0, 8.0, parse_axes("cached"), "claude-haiku-4-5")
     sc.flush()
-    assert CaptionSidecar(video).get("a:0.0") == "cached"
+    assert CaptionSidecar(video).get("a:0.0")["action"] == "cached"
     assert CaptionSidecar(video).get("a:4.0") is None
 
 
@@ -256,7 +261,7 @@ def test_caption_dir_override(tmp_path):
     video = tmp_path / "a.mp4"
     out = tmp_path / "elsewhere"
     sc = CaptionSidecar(video, caption_dir=out)
-    sc.put("a:0.0", 0.0, 8.0, "c", "m")
+    sc.put("a:0.0", 0.0, 8.0, parse_axes("c"), "m")
     sc.flush()
     assert (out / "captions.csv").exists()
     assert not (tmp_path / "captions.csv").exists()
@@ -359,7 +364,7 @@ class Recording(MockCaptionBackend):
 
     def caption(self, frames, span, n_frames=None, stride=4.0):
         self.shapes.append(frames.shape)
-        return self.text
+        return parse_axes(self.text)
 
 
 class Refuses(MockCaptionBackend):
@@ -395,11 +400,12 @@ def test_caption_pass_over_an_existing_index(tmp_path, synthetic_video):
 
     assert counts["captioned"] == len(before) == 2
     rows = store.table.search().limit(100).to_list()
-    assert all(r["text"] == "kong vault over a rail" for r in rows)
+    assert all(r["text"] == "kong vault over a rail, unclear, unclear, unclear"
+               for r in rows)
     assert {r["id"]: list(map(float, r["vector"])) for r in rows} == before
     assert {h["id"] for h in store.text_search("kong")} == set(before)
     sidecar = CaptionSidecar(synthetic_video)
-    assert all(sidecar.get(i) == "kong vault over a rail" for i in before)
+    assert all(sidecar.get(i)["action"] == "kong vault over a rail" for i in before)
 
 
 @requires_ffmpeg
@@ -451,7 +457,8 @@ def test_mm_caption_cli(tmp_path, synthetic_video):
     assert result.exit_code == 0, result.output
     assert "'captioned': 2" in result.output
     rows = list(csv.DictReader((out / "captions.csv").open()))
-    assert [r["caption"] for r in rows] == ["mock caption of 3 frames over 8.0s"] * 2
+    assert [r["caption"] for r in rows] == [
+        "mock caption of 3 frames, one person, over 8.0s, daylight"] * 2
 
     bad = CliRunner().invoke(main, [
         "--data-dir", str(tmp_path / "data"), "caption", str(synthetic_video.parent),
@@ -476,3 +483,10 @@ def test_prompt_can_come_from_a_file(tmp_path):
 def test_unknown_prompt_names_the_shipped_ones():
     with pytest.raises(ValueError, match="general"):
         load_prompt("nope")
+
+
+def test_light_is_held_to_its_enum():
+    assert parse_axes('{"light": "dusk"}')["light"] == "dusk/dawn"
+    assert parse_axes('{"light": "Sunny"}')["light"] == "sunny"
+    assert parse_axes('{"light": "daylight"}')["light"] == "unclear"
+    assert all(parse_axes('{"light": "%s"}' % L)["light"] == L for L in LIGHTS)

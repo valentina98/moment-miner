@@ -38,7 +38,52 @@ SHORT_VIDEO_S = 8.0
 LONG_VIDEO_S = 120.0
 FRAME_WIDTH = 640
 
+AXES = ("action", "who", "scene", "light")
+UNKNOWN = "unclear"
+# Closed set: light is a filter, and a filter with synonyms in it misses rows.
+LIGHTS = ("sunny", "overcast", "golden hour", "dusk/dawn", "night", "floodlit",
+          "indoors")
+
 DEFAULT_PROMPT = "general"
+
+
+def parse_axes(reply: str) -> dict[str, str]:
+    """A model's reply -> one value per axis, never empty.
+
+    JSON is what the shipped prompts ask for, because a named key cannot be
+    mistaken for the one beside it. The comma fallback exists for models that
+    cannot hold a format, and it is positional, so it is the lossy path: a
+    comma inside a value shifts everything after it.
+    """
+    text = reply.strip()
+    # Models fence JSON in ```json blocks unprompted, so take the outermost
+    # braces rather than trusting the reply to start with one.
+    start, end = text.find("{"), text.rfind("}")
+    if start != -1 and end > start:
+        try:
+            got = json.loads(text[start:end + 1])
+        except json.JSONDecodeError:
+            got = {}
+    else:
+        parts = [p.strip() for p in text.split(",")]
+        got = dict(zip(AXES, parts))
+    axes = {a: str(got.get(a) or UNKNOWN).strip() or UNKNOWN for a in AXES}
+    axes["light"] = _light(axes["light"])
+    return axes
+
+
+def _light(value: str) -> str:
+    """Hold `light` to its enum. Models drop half of `dusk/dawn` and invent
+    neighbours like `daylight`; a filter cannot afford either."""
+    v = value.strip().lower()
+    if v in LIGHTS:
+        return v
+    return next((L for L in LIGHTS if v and (v in L or L.startswith(v))), UNKNOWN)
+
+
+def joined(axes: dict[str, str]) -> str:
+    """The searchable one-line form, and what a person reads."""
+    return ", ".join(axes[a] for a in AXES)
 
 
 def prompt_names() -> list[str]:
@@ -76,8 +121,8 @@ class CaptionBackend(ABC):
 
     @abstractmethod
     def caption(self, frames: np.ndarray, span: float,
-                n_frames: int | None = None, stride: float = 4.0) -> str:
-        """(k, h, w, 3) uint8 frames of one segment -> one sentence."""
+                n_frames: int | None = None, stride: float = 4.0) -> dict[str, str]:
+        """(k, h, w, 3) uint8 frames of one segment -> one value per axis."""
 
     def preflight(self) -> None:
         """Resolve credentials before indexing starts.
@@ -94,9 +139,10 @@ class MockCaptionBackend(CaptionBackend):
     name = "mock"
 
     def caption(self, frames: np.ndarray, span: float,
-                n_frames: int | None = None, stride: float = 4.0) -> str:
+                n_frames: int | None = None, stride: float = 4.0) -> dict[str, str]:
         picked = subsample(frames, span, stride, n_frames)
-        return f"mock caption of {len(picked)} frames over {span:.1f}s"
+        return {"action": f"mock caption of {len(picked)} frames",
+                "who": "one person", "scene": f"over {span:.1f}s", "light": "daylight"}
 
 
 def sample_points(span: float, stride: float) -> list[float]:
@@ -307,10 +353,11 @@ class ClaudeCaptionBackend(CaptionBackend):
         text = " ".join(
             b.text.strip() for b in response.content if b.type == "text"
         ).strip()
-        # A label is not a sentence, so its first character is lowercased
-        # here rather than asked for in the prompt: normalising in code is
-        # the same for every backend and cannot drift between runs.
-        return text[:1].lower() + text[1:]
+        axes = parse_axes(text)
+        # A label is not a sentence, so each value's first character is
+        # lowercased here rather than asked for in the prompt: normalising in
+        # code is the same for every backend and cannot drift between runs.
+        return {a: v[:1].lower() + v[1:] for a, v in axes.items()}
 
 
 def get_caption_backend(name: str, **kwargs) -> CaptionBackend:
@@ -325,7 +372,7 @@ def get_caption_backend(name: str, **kwargs) -> CaptionBackend:
 
 
 SIDECAR_NAME = "captions.csv"
-SIDECAR_COLUMNS = ["id", "t0", "t1", "caption", "model", "written"]
+SIDECAR_COLUMNS = ["id", "t0", "t1", *AXES, "caption", "model", "written"]
 
 
 class CaptionSidecar:
@@ -350,14 +397,21 @@ class CaptionSidecar:
                 self.rows = {r["id"]: r for r in csv.DictReader(f)}
         self._dirty = False
 
-    def get(self, seg_id: str) -> str | None:
+    def get(self, seg_id: str) -> dict[str, str] | None:
         row = self.rows.get(seg_id)
-        return row["caption"] if row else None
+        if not row:
+            return None
+        if row.get("action"):
+            return {a: row[a] for a in AXES}
+        # Rows written before the axes existed carry only the joined caption.
+        return parse_axes(row["caption"])
 
-    def put(self, seg_id: str, t0: float, t1: float, caption: str, model: str) -> None:
+    def put(self, seg_id: str, t0: float, t1: float, axes: dict[str, str],
+            model: str) -> None:
         self.rows[seg_id] = {
-            "id": seg_id, "t0": f"{t0:.1f}", "t1": f"{t1:.1f}",
-            "caption": caption, "model": model, "written": date.today().isoformat(),
+            "id": seg_id, "t0": f"{t0:.1f}", "t1": f"{t1:.1f}", **axes,
+            "caption": joined(axes), "model": model,
+            "written": date.today().isoformat(),
         }
         self._dirty = True
 

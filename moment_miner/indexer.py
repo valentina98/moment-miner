@@ -10,6 +10,7 @@ from .captions import (
     SHORT_VIDEO_S,
     CaptionBackend,
     CaptionSidecar,
+    joined,
     frames_for_duration,
     still_times,
 )
@@ -153,13 +154,13 @@ def index_pending(
                 seg_id = f"{vid}:{t0:.1f}"
                 text = manifest.transcript_between(vid, t0, t1)
                 if sidecar is not None:
-                    caption = sidecar.get(seg_id)
-                    if caption is None:
-                        caption = caption_backend.caption(
+                    axes = sidecar.get(seg_id)
+                    if axes is None:
+                        axes = caption_backend.caption(
                             frames, t1 - t0, n_caption_frames, stride)
-                        sidecar.put(seg_id, t0, t1, caption, caption_backend.name)
+                        sidecar.put(seg_id, t0, t1, axes, caption_backend.name)
                         counts["captioned"] += 1
-                    text = f"{text} {caption}".strip()
+                    text = f"{text} {joined(axes)}".strip()
                 rows.append({
                     "id": seg_id,
                     "video_id": vid,
@@ -250,20 +251,20 @@ def caption_indexed(
         try:
             for r in sorted(rows, key=lambda r: r["t0"]):
                 t0, t1 = r["t0"], r["t1"]
-                caption = None if force else sidecar.get(r["id"])
-                if caption is None:
+                axes = None if force else sidecar.get(r["id"])
+                if axes is None:
                     stills = extract_stills(
                         path, still_times(t0, t1, stride, n_frames, per_window),
                         frame_w, frame_h)
                     if len(stills) == 0:
                         log(f"    {r['id']}: no frames decoded, skipped")
                         continue
-                    caption = caption_backend.caption(stills, t1 - t0, n_frames, stride)
-                    sidecar.put(r["id"], t0, t1, caption, caption_backend.name)
+                    axes = caption_backend.caption(stills, t1 - t0, n_frames, stride)
+                    sidecar.put(r["id"], t0, t1, axes, caption_backend.name)
                     counts["captioned"] += 1
                 else:
                     counts["reused"] += 1
-                text = f"{manifest.transcript_between(r['video_id'], t0, t1)} {caption}".strip()
+                text = f"{manifest.transcript_between(r['video_id'], t0, t1)} {joined(axes)}".strip()
                 if text != r["text"]:
                     store.set_text(r["id"], text)
             counts["videos"] += 1
