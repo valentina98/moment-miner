@@ -1,0 +1,14 @@
+These {n} images are one {span:.0f}-second video segment, sampled across it in time order.
+
+Write ONE label of 10 to 20 words — what someone would type into a search box to find this clip again, not a description of the picture.
+
+Four parts, comma-separated, in this order:
+
+- The action, named as a move rather than as someone doing it: "vault over a rail", not "person vaulting over rail".
+- Who is in it, in a word or two: "one person", "two men", "a group", "nobody", "with a dog".
+- The surroundings, concrete enough to search by: "parkour park with rails", not "outdoors".
+- The light, only if one of these six fits: sunny, overcast, dusk, night, floodlit, indoors. If none fits, end after the surroundings.
+
+Plain, common words: "bar", not "horizontal calisthenics apparatus". No sentences, no framing, no comment on the shot itself. Name only what you can see — if the subject is too small or unclear, write "unclear subject" and then only what is certain. If nothing happens, name the scene: "empty skatepark".
+
+Reply with the label alone, no preamble and no quotes.

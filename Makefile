@@ -13,6 +13,8 @@ ARGS     ?=
 TEMPLATE ?= parkour
 PORT     ?= 7700
 CAPTION_MODEL ?= claude-haiku-4-5
+# Caption prompt: a shipped name (general, parkour) or a file path.
+CAPTION_PROMPT ?= general
 GPUS     ?=
 
 # The subscription token reaches only `caption` and `recaption`, and never as
@@ -52,11 +54,11 @@ index: image
 	$(RUN) $(IMAGE) index /videos/$(SUB) $(ARGS)
 
 caption: image
-	$(TOKEN_FILE) $(RUN_RW) $(TOKEN_MOUNT) $(IMAGE) index /videos/$(SUB) --caption $(CAPTION_MODEL)
+	$(TOKEN_FILE) $(RUN_RW) $(TOKEN_MOUNT) $(IMAGE) index /videos/$(SUB) --caption $(CAPTION_MODEL) --caption-prompt $(CAPTION_PROMPT)
 
 # Captions an index that already exists, without re-embedding it.
 recaption: image
-	$(TOKEN_FILE) $(RUN_RW) $(TOKEN_MOUNT) $(IMAGE) caption /videos/$(SUB) --model $(CAPTION_MODEL) $(ARGS)
+	$(TOKEN_FILE) $(RUN_RW) $(TOKEN_MOUNT) $(IMAGE) caption /videos/$(SUB) --model $(CAPTION_MODEL) --caption-prompt $(CAPTION_PROMPT) $(ARGS)
 
 search: image
 	$(RUN) $(IMAGE) search "$(Q)" -k $(K) --llc-dir /data/llc

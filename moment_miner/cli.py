@@ -23,6 +23,12 @@ def main(ctx, data_dir):
     ctx.obj = Path(data_dir)
 
 
+def _prompt_names() -> list[str]:
+    from .captions import prompt_names
+
+    return prompt_names()
+
+
 @main.command(name="help")
 @click.argument("command", required=False)
 @click.pass_context
@@ -64,6 +70,8 @@ def help_cmd(ctx, command):
 @click.option("--caption-dir", default=None,
               help="Write caption sidecars here instead of beside each video "
                    "(use when the archive is mounted read-only).")
+@click.option("--caption-prompt", default="general", show_default=True,
+              help="Caption prompt: a shipped name (see `mm caption --help`) or a file path.")
 @click.option("--caption-frames", default=None, type=int,
               help="Force the stills sent per segment. By default the count "
                    "follows from the segment's span and --stride. Each still "
@@ -80,7 +88,8 @@ def help_cmd(ctx, command):
               help="A video at least this many seconds counts as long.")
 @click.pass_obj
 def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex,
-          caption, allow_paid, paid_budget_usd, caption_dir, caption_frames,
+          caption, allow_paid, paid_budget_usd, caption_dir, caption_prompt,
+          caption_frames,
           caption_frames_short, caption_frames_long, short_video_s,
           long_video_s):
     """Scan FOLDER recursively and index new/changed videos."""
@@ -101,7 +110,7 @@ def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex,
             motion_store=MotionStore(data_dir),
             win=window, stride=stride, log=click.echo,
             caption_backend=get_caption_backend(
-                caption, allow_paid=allow_paid,
+                caption, allow_paid=allow_paid, prompt=caption_prompt,
                 paid_budget_usd=paid_budget_usd) if caption else None,
             caption_dir=caption_dir,
             caption_frames=caption_frames,
@@ -125,7 +134,8 @@ def _frame_size(ctx, param, value):
     return w, h
 
 
-@main.command()
+@main.command(
+    epilog="Caption prompts: " + ", ".join(_prompt_names()))
 @click.argument("folder", type=click.Path(exists=True, file_okay=False))
 @click.option("--model", default="claude-haiku-4-5", show_default=True,
               help="Claude model id, or 'mock'. Spends session quota via "
@@ -140,6 +150,8 @@ def _frame_size(ctx, param, value):
                    "before sending.")
 @click.option("--caption-dir", default=None,
               help="Write caption sidecars here instead of beside each video.")
+@click.option("--caption-prompt", default="general", show_default=True,
+              help="Caption prompt: a shipped name (see `mm caption --help`) or a file path.")
 @click.option("--caption-frames", default=None, type=int,
               help="Force the stills sent per segment. By default the count "
                    "follows from the segment's span and the indexed stride.")
@@ -153,7 +165,7 @@ def _frame_size(ctx, param, value):
               help="Caption again even where the sidecar already has one.")
 @click.pass_obj
 def caption(data_dir, folder, model, backend, frame_size, caption_dir,
-            caption_frames, caption_frames_short, caption_frames_long,
+            caption_prompt, caption_frames, caption_frames_short, caption_frames_long,
             short_video_s, long_video_s, force):
     """Caption the already-indexed segments under FOLDER.
 
@@ -166,7 +178,8 @@ def caption(data_dir, folder, model, backend, frame_size, caption_dir,
     store = SegmentStore(data_dir, backend)
     try:
         result = caption_indexed(
-            Manifest(data_dir / "manifest.db"), store, get_caption_backend(model),
+            Manifest(data_dir / "manifest.db"), store,
+            get_caption_backend(model, prompt=caption_prompt),
             folder, frame_w=frame_size[0], frame_h=frame_size[1],
             caption_dir=caption_dir, caption_frames=caption_frames,
             caption_frames_short=caption_frames_short,

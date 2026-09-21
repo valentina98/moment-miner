@@ -18,6 +18,8 @@ from moment_miner.captions import (
     resolve_credentials,
     still_times,
     subsample,
+    load_prompt,
+    prompt_names,
 )
 
 from .conftest import requires_ffmpeg
@@ -455,3 +457,22 @@ def test_mm_caption_cli(tmp_path, synthetic_video):
         "--data-dir", str(tmp_path / "data"), "caption", str(synthetic_video.parent),
         "--model", "mock", "--backend", "mock", "--frame-size", "wide"])
     assert bad.exit_code != 0 and "WxH" in bad.output
+
+
+def test_shipped_prompts_load_and_differ():
+    general = load_prompt("general")
+    parkour = load_prompt("parkour")
+    assert "{n}" in general and "{span:.0f}" in general
+    assert "parkour" in parkour.lower() and "parkour" not in general.lower()
+    assert {"general", "parkour"} <= set(prompt_names())
+
+
+def test_prompt_can_come_from_a_file(tmp_path):
+    p = tmp_path / "mine.txt"
+    p.write_text("{n} frames, {span:.0f}s")
+    assert load_prompt(str(p)) == "{n} frames, {span:.0f}s"
+
+
+def test_unknown_prompt_names_the_shipped_ones():
+    with pytest.raises(ValueError, match="general"):
+        load_prompt("nope")

@@ -28,29 +28,32 @@ Captions are read back on the next pass. Re-indexing a folder — including `--r
 
 These tiers were reasoned about at stride 4 and do not adapt to another one — at stride 2 a full window would yield four frames instead of two, and frames are the dominant cost of a pass. `--caption-frames` forces a count and overrides the rule; `--caption-frames-short` / `--caption-frames-long` do the same per video length.
 
-**Prompt.** The `PROMPT` constant in `moment_miner/captions.py` is the single source of truth. It asks for a **label of 5 to 12 words, not a description**: the action first, then the setting, in the plain words someone would type into a search box — "kong vault over a rail, concrete plaza". Sentences, framing ("a video showing"), and commentary on the shot are all banned, and a subject too small to identify must be called unclear rather than guessed.
+**Prompt.** The `PROMPT` constant in `moment_miner/captions.py` is the single source of truth. It asks for a **label of 10 to 20 words, not a description**, in the plain words someone would type into a search box — "cutting the cake, two people, church hall with wooden beams, indoors". Sentences, framing ("a video showing"), and commentary on the shot are all banned, and a subject too small to identify must be called unclear rather than guessed. What the label names, and why those things and not others, is the next section.
 
-The first version asked for 15-30 words and got paragraphs: *"Graffiti-covered concrete river embankment under a road bridge, people leaning on the railing above, green water and wooded hillside; the static shot barely changes."* Nobody types that, and against a BM25 index the extra words dilute the terms that matter.
+A longer budget turns the label into a description: *"Graffiti-covered concrete river embankment under a road bridge, people leaning on the railing above, green water and wooded hillside; the static shot barely changes."* Nobody types that, and against a BM25 index the extra words dilute the terms that matter.
 
-## Two routes, one method
+## What the label carries, and how to change it
 
-| | `mm index --caption` | A Claude Code session |
-| --- | --- | --- |
-| Pays with | Your Claude subscription; `ANTHROPIC_API_KEY` only with `--allow-paid` and a budget (see Credentials) | Your Claude subscription |
-| Frames | the stills the rule above picks (two at the defaults), at the 456x256 extraction raster | identical |
-| Prompt | `PROMPT` in `captions.py` | paste the same text |
-| Output | `captions.csv` + the index | a CSV you place at `<folder>/captions.csv` |
-| Also loads | nothing | your `CLAUDE.md` and project memory |
+**The label is the retrieval surface: what it names is what can be found.** No ranker recovers an axis the caption never mentions — not BM25, not an embedding, not a reranker. So this list is a choice about which searches are possible, and it is meant to be revisited when the task changes.
 
-The two are the same pass as long as the session gets the same frames and the same prompt. The one difference that does not go away: a Claude Code session loads `CLAUDE.md` and memory into its context, so it measures the model *plus* that harness. `--bare` would strip them but authenticates strictly by `ANTHROPIC_API_KEY`, never OAuth, so it is not available on a subscription. Identical contamination across sessions does not bias a comparison between models; it does make those captions incomparable with API-produced ones.
+| Axis | Why it is in |
+| --- | --- |
+| Action | The thing searched for, almost always. It leads, so its words carry the most weight. |
+| Who is in the shot | Counts discriminate — two people talking is not one person working. A word or two. |
+| Surroundings | Named concretely. "Outdoors" alone is what makes many clips from one session read alike. |
+| Light | Cheap, visibly varies, not recoverable from metadata. |
 
-**The session route needs watching.** It ends by writing a file, and not every model runs with auto-accept available — where it is not, the session stops at a permission prompt and waits indefinitely. Nothing has failed at that point and nothing is lost; accept the write and it finishes. Check for the output file before concluding a run died, and do not start three sessions and walk away.
+Three things are left out on purpose. **Outcome** — clean landing, bail, slip — because a handful of stills cannot show a stumble, so asking for it invites an invented one. **Shot type**, as the least certain thing to read off stills. **Who someone is, by name**: a vision model should not guess identity, so names belong in a file beside the footage, joined into the segment's text the way a transcript is.
 
-Use the session route to compare models or spot-check a handful of segments. Use `--caption` for anything bulk.
+**The prompt is a template, and two ship.** They live in `moment_miner/templates/` as `caption_<name>.txt` and are chosen with `--caption-prompt`, which also takes a path to your own. `general` is the one to copy: it names the four axes with examples from no particular world. `parkour` is a worked example of the same template tuned to one corpus, and it shows what tuning is for — on parkour footage filmed at a skate spot, the general prompt returns "skateboarding", "wheelie" and "bicycle stunt", while the tuned one returns vaults and wall runs from the same stills. A prompt is a template because what a caption names decides what can be searched, and that differs per corpus.
+
+**What the index already measures exactly does not belong in a label.** Static-vs-moving, frame rate, duration and date are numbers, held in the motion table and the probe metadata; a caption guessing "static shot" duplicates a measurement and spends words doing it. Those are filters — the label is for what only a reader of the frames can say.
+
+**To re-evaluate the axes:** write down the queries the new task actually types, before looking at any caption; name the axis each one searches on, since an axis no caption names is a search that cannot work however good the ranker is; then change `PROMPT` and re-caption to a separate `--caption-dir`, so the old set survives as a reference to compare against. Each axis costs two to four words, and a longer label dilutes every term in it. Caption sets written by different prompts are different instruments — re-run a comparison rather than reading across.
 
 ## Credentials
 
-Resolved in this order, once, when the first caption is requested. **Reordered 2026-09-18: the free route wins, and the paid one is refused unless it was asked for and capped.**
+Resolved in this order, once, when the first caption is requested. The free route wins, and the paid one is refused unless it was asked for and capped.
 
 1. Claude Code's subscription token: `claudeAiOauth.accessToken` in `$CLAUDE_CONFIG_DIR/.credentials.json` (default `~/.claude`), and nothing else in that file, which also holds refresh tokens and MCP servers' tokens. Under Docker the file never enters the container: `make caption` and `make recaption` copy that one value into a temp file, mount it read-only and delete it afterwards, and no other target gets a token — spends session quota, no money
 2. `ANTHROPIC_API_KEY` — spends money, so it is used **only** with `--allow-paid` and `--paid-budget-usd` above zero. A key on its own, even with no subscription credentials present, raises rather than bills
@@ -62,17 +65,21 @@ Captioning is the only stage that spends anything — money on an API key, sessi
 
 ## What it costs
 
-Segments per hour of footage is `3600 / stride` — 900 at the default stride 4, and higher on an archive of short clips, whose truncated windows do not overlap (a 50-clip corpus measured 1086). Under `mm index --caption`, stills are sent at the 456x256 extraction raster — captioning reuses the frames decoded for the embedding and never upscales them — which is ~170 input tokens each (156 by `w x h / 750`, 170 by counting 28-pixel tiles; confirm with `count_tokens` before a bulk run). `mm caption` at its default 640x360 sends ~307 by the same `w x h / 750` rule, so the table below understates its cost by roughly 1.5x. The prompt adds ~200 text tokens per segment, and ~30 output tokens come back.
+**Nothing, on the subscription route.** The Claude Code token spends session quota and no money, and it is the route both `make caption` and `make recaption` take. The figures below are what the same work would cost through `ANTHROPIC_API_KEY`, which is only reachable with `--allow-paid` and a budget.
 
-At 900 segments/hour and the two frames an ordinary segment yields: `900 x (2 x 170 + 200)` = 0.49 M input tokens, `900 x 30` = 0.027 M output. **Frame count is the main cost lever** — each extra still adds ~170 tokens to a ~540-token request, so forcing 5 frames costs roughly 1.7x what the rule's two do.
+Segments per hour of footage is `3600 / stride` — 900 at the default stride 4, and higher on an archive of short clips, whose truncated windows do not overlap (a 50-clip corpus measured 1086). A still at `mm caption`'s default 640x360 is ~300 input tokens (299 by counting 28-pixel tiles, 307 by `w x h / 750`; confirm with `count_tokens` before a bulk run), the prompt adds ~200, and ~30 output tokens come back. So an ordinary two-still segment is ~800 in and ~30 out, and an hour of footage is **0.72 M input, 0.027 M output**. Under `mm index --caption` stills are the 456x256 the embedding already decoded, ~170 tokens each, which is about 0.6x of that.
+
+**Frame count is the main cost lever** — each extra still adds ~300 tokens to an ~800-token request, so forcing 5 frames costs roughly 1.9x what the rule's two do.
 
 | Model | $/MTok in / out | Per hour of footage | Batch API (-50%) |
 | --- | --- | --- | --- |
-| Opus 5 | $5 / $25 | $3.11 | $1.55 |
-| Sonnet 5 | $2 / $10 | $1.24 | $0.62 |
-| Haiku 4.5 | $1 / $5 | $0.62 | $0.31 |
+| Opus 5 | $5 / $25 | $4.28 | $2.14 |
+| Sonnet 5 | $2 / $10 | $1.71 | $0.86 |
+| Haiku 4.5 | $1 / $5 | $0.86 | $0.43 |
 
-Prices read from Anthropic's model pricing 2026-06-24; re-check before a bulk run. Prompt caching does not help — every image is unique. The Batch API's 50% does.
+A small corpus makes that concrete: 131 segments is ~105 k input and ~4 k output tokens, about **$0.12** on Haiku 4.5 — and $0 on the subscription.
+
+Prices read from Anthropic's model pricing 2026-06-24; re-check before a bulk run. Prompt caching does not help — every image is unique. The Batch API's 50% does, and it is a price discount, so it buys nothing on the subscription.
 
 ## Running it
 
@@ -84,7 +91,7 @@ mm caption /videos --model claude-haiku-4-5 --frame-size 640x360
 make recaption VIDEOS=footage/src CAPTION_MODEL=claude-haiku-4-5 ARGS="--force"
 ```
 
-**Two routes.** `mm index --caption` captions while it indexes, from the frames it already decoded for the embedding, so the model never sees more than 456x256. `mm caption` is a separate pass over an index that already exists: it reads each segment's span from the store, seeks to the same instants `index --caption` would pick, decodes only those stills at `--frame-size` (default 640x360; anything wider than 640 px is downscaled before sending, `FRAME_WIDTH` in `captions.py`), then rewrites the row's `text` as transcript plus caption and rebuilds the FTS index. Vectors, schema and fusion are untouched, and the embedding model is never loaded. Use it when the caption model, prompt or raster changes and the embeddings have not — that no longer costs a re-index. Segments that already have a sidecar caption are not bought again, but the cached caption is still written into the row; `--force` buys a fresh one. Stride and frames-per-window are read from what the manifest recorded for each video.
+**Two routes.** `mm index --caption` captions while it indexes, from the frames it already decoded for the embedding, so the model never sees more than 456x256. `mm caption` is a separate pass over an index that already exists: it reads each segment's span from the store, seeks to the same instants `index --caption` would pick, decodes only those stills at `--frame-size` (default 640x360; anything wider than 640 px is downscaled before sending, `FRAME_WIDTH` in `captions.py`), then rewrites the row's `text` as transcript plus caption and rebuilds the FTS index. Vectors, schema and fusion are untouched, and the embedding model is never loaded. Use it when the caption model, prompt or raster changes and the embeddings have not, which costs no re-index. Segments that already have a sidecar caption are not bought again, but the cached caption is still written into the row; `--force` buys a fresh one. Stride and frames-per-window are read from what the manifest recorded for each video.
 
 `make caption` exists because captions are written beside the footage: it mounts the archive read-write, where every other target mounts it `:ro`. Running `mm index --caption` against a read-only archive fails immediately, before the first paid request, rather than after. `--caption-dir` writes the sidecars elsewhere if the archive must stay read-only.
 
