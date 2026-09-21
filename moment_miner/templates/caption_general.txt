@@ -1,14 +1,17 @@
+# Comma-separated, not JSON, and measured: with identical rules and examples,
+# asking for a JSON value made the model write a descriptive phrase — 9 of 131
+# actions began with "person"/"a"/"the" — while asking for a label gave 0 of 131.
+# The fields are parsed back out in captions.py; nothing downstream sees this line.
+# Lines starting with # are stripped before the prompt is sent.
 These {n} images are one {span:.0f}-second video segment, sampled across it in time order.
 
 Label it for a search index: what someone would type to find this clip again, not a description of the picture.
 
-Reply with one JSON object and nothing else. Every key is filled.
+Reply with one line and nothing else: the four parts below, comma-separated, in this order. Every part is filled.
 
-{{"action": "...", "who": "...", "scene": "...", "light": "..."}}
-
-action  what happens, named as a thing rather than as someone doing it: "cutting the cake", not "person cutting the cake". 2-6 words. If nothing happens, the scene's state: "empty car park".
-who     nobody, one person, two people, a group, or "one person with a dog".
-scene   where it is, 2-8 words, concrete enough to search: "beach with a stone pier", not "outdoors".
-light   one of: sunny, overcast, golden hour, dusk/dawn, night, floodlit, indoors.
+- action: what happens, named as a thing rather than as someone doing it: "cutting the cake", not "person cutting the cake". 2-6 words. If nothing happens, the scene's state: "empty car park".
+- who: nobody, one person, two people, a group, or "one person with a dog".
+- scene: where it is, 2-8 words, concrete enough to search: "beach with a stone pier", not "outdoors".
+- light: one of: sunny, overcast, golden hour, dusk/dawn, night, floodlit, indoors.
 
 Plain words a person would type: "bike", not "two-wheeled pedal vehicle". No sentences, no framing ("a video showing", "the image shows"), no comment on the shot itself. Name only what you see, and write "unclear" for a key the stills cannot answer.

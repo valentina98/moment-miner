@@ -490,3 +490,9 @@ def test_light_is_held_to_its_enum():
     assert parse_axes('{"light": "Sunny"}')["light"] == "sunny"
     assert parse_axes('{"light": "daylight"}')["light"] == "unclear"
     assert all(parse_axes('{"light": "%s"}' % L)["light"] == L for L in LIGHTS)
+
+
+def test_prompt_comments_are_not_sent_to_the_model():
+    text = load_prompt("parkour")
+    assert "#" not in text.splitlines()[0]
+    assert text.startswith("These {n} images")

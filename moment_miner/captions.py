@@ -56,8 +56,13 @@ def parse_axes(reply: str) -> dict[str, str]:
     comma inside a value shifts everything after it.
     """
     text = reply.strip()
-    # Models fence JSON in ```json blocks unprompted, so take the outermost
-    # braces rather than trusting the reply to start with one.
+    # The shipped prompts ask for the comma form, not JSON, because the format
+    # changes what the model writes: with identical rules, a JSON value came
+    # back as a descriptive phrase ("person vaulting over a rail") on 9 of 131
+    # segments, and a comma-separated label on 0 of 131. JSON is still accepted
+    # because a model that volunteers it should not be a parse failure, and
+    # because models fence it in ```json blocks unprompted — so take the
+    # outermost braces rather than trusting the reply to start with one.
     start, end = text.find("{"), text.rfind("}")
     if start != -1 and end > start:
         try:
@@ -92,6 +97,11 @@ def prompt_names() -> list[str]:
                   for f in tdir.iterdir() if f.name.startswith("caption_"))
 
 
+def _strip_comments(text: str) -> str:
+    """`#` lines carry why a prompt is worded as it is; the model never sees them."""
+    return "".join(l for l in text.splitlines(True) if not l.startswith("#")).lstrip()
+
+
 def load_prompt(name_or_path: str = DEFAULT_PROMPT) -> str:
     """A shipped prompt by name, or any file by path.
 
@@ -101,12 +111,12 @@ def load_prompt(name_or_path: str = DEFAULT_PROMPT) -> str:
     """
     path = Path(name_or_path)
     if path.suffix and path.exists():
-        return path.read_text(encoding="utf-8")
+        return _strip_comments(path.read_text(encoding="utf-8"))
     shipped = pkg_files("moment_miner") / "templates" / f"caption_{name_or_path}.txt"
     if not shipped.is_file():
         raise ValueError(f"unknown caption prompt: {name_or_path!r} "
                          f"(shipped: {', '.join(prompt_names())}, or give a file path)")
-    return shipped.read_text(encoding="utf-8")
+    return _strip_comments(shipped.read_text(encoding="utf-8"))
 
 
 
