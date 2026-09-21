@@ -39,13 +39,16 @@ FRAME_WIDTH = 640
 
 PROMPT = """These {n} images are one {span:.0f}-second video segment, sampled across it in time order.
 
-Write ONE label of 5 to 12 words. A label is what someone would type into a search box to find this clip again — not a description of the picture.
+Write ONE label of 10 to 20 words — what someone would type into a search box to find this clip again, not a description of the picture.
 
-- Lead with the action or event, then the setting: "kong vault over a rail, concrete plaza".
-- Plain, common words. The word a person would search, not the more precise one: "bar", not "horizontal calisthenics apparatus".
-- No sentences, no framing ("a video showing", "the image shows"), no commentary on the shot itself.
-- Name only what you can see. If the subject is too small or unclear to identify, write "unclear subject" and then only what is certain.
-- If nothing happens, say what the scene is: "empty skatepark at dusk".
+Four parts, comma-separated, in this order:
+
+- The action, named as a move rather than as someone doing it: "vault over a rail", not "person vaulting over rail".
+- Who is in it, in a word or two: "one person", "two men", "a group", "nobody", "with a dog".
+- The surroundings, concrete enough to search by: "parkour park with rails", not "outdoors".
+- The light, only if one of these six fits: sunny, overcast, dusk, night, floodlit, indoors. If none fits, end after the surroundings.
+
+Plain, common words: "bar", not "horizontal calisthenics apparatus". No sentences, no framing, no comment on the shot itself. Name only what you can see — if the subject is too small or unclear, write "unclear subject" and then only what is certain. If nothing happens, name the scene: "empty skatepark".
 
 Reply with the label alone, no preamble and no quotes."""
 
@@ -286,9 +289,13 @@ class ClaudeCaptionBackend(CaptionBackend):
             max_tokens=self.max_tokens,
             messages=[{"role": "user", "content": content}],
         )
-        return " ".join(
+        text = " ".join(
             b.text.strip() for b in response.content if b.type == "text"
         ).strip()
+        # A label is not a sentence, so its first character is lowercased
+        # here rather than asked for in the prompt: normalising in code is
+        # the same for every backend and cannot drift between runs.
+        return text[:1].lower() + text[1:]
 
 
 def get_caption_backend(name: str, **kwargs) -> CaptionBackend:
