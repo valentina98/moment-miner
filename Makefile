@@ -9,6 +9,11 @@ SUB      ?= .
 # Ground truth lives beside the footage, so `eval` wants VIDEOS=footage while
 # `index` wants VIDEOS=footage/src.
 LABELS   ?= labels.csv
+# One prompt per line. Relative to the repo, not to VIDEOS, which often points
+# at an external drive.
+PROMPTS  ?= prompts.txt
+AXIS     ?= action
+RANKER   ?= mock
 ARGS     ?=
 TEMPLATE ?= parkour
 PORT     ?= 7700
@@ -29,8 +34,12 @@ TOKEN_FILE = tok=$$(mktemp) && trap 'rm -f "$$tok"' EXIT && trap 'exit 130' INT 
 	"$(CLAUDE_CREDS)" > "$$tok" &&
 TOKEN_MOUNT = -v "$$tok":/root/.claude/.credentials.json:ro
 
+# Keys come from .env when it exists, so a fresh checkout needs no exports;
+# docker lets an exported variable of the same name win over the file.
 RUN = docker run --rm $(GPUS) \
+	$(if $(wildcard .env),--env-file .env,) \
 	-e ANTHROPIC_API_KEY \
+	-e TYPESAFE_API_KEY \
 	-v $(abspath $(VIDEOS)):/videos:ro \
 	-v mm-hf-cache:/root/.cache \
 	-v $(DATA):/data
@@ -39,7 +48,7 @@ RUN = docker run --rm $(GPUS) \
 # read-write. Everything else keeps :ro.
 RUN_RW = $(subst :ro,,$(RUN))
 
-.PHONY: image dev-image test index caption recaption search mine annotate eval serve shell
+.PHONY: image dev-image test index caption recaption search mine annotate eval probe serve shell
 
 image:
 	docker build --target runtime -t $(IMAGE) .
@@ -76,6 +85,10 @@ annotate: image
 
 eval: image
 	$(RUN) $(IMAGE) eval /videos/$(LABELS)
+
+probe: image
+	@test -f "$(PROMPTS)" || { echo "no prompts file at $(PROMPTS) -- write one, or pass PROMPTS=<path>"; exit 1; }
+	$(RUN) -v $(abspath $(PROMPTS)):/prompts.txt:ro $(IMAGE) probe /prompts.txt --axis $(AXIS) --ranker $(RANKER) -k $(K) $(ARGS)
 
 serve: image
 	$(RUN) -p $(PORT):$(PORT) $(IMAGE) serve --host 0.0.0.0 --port $(PORT)

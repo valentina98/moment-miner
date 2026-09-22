@@ -5,8 +5,10 @@
 `mm probe` answers the other question — whether the words you would actually type find the moment. There is no ground truth for that, so it prints hits to read rather than a number to quote.
 
 ```bash
-mm probe prompts.txt --captions /videos/captions.csv --axis action --ranker laya -k 3
+make probe VIDEOS=footage/src PROMPTS=prompts.txt RANKER=laya K=3
 ```
+
+`PROMPTS` is one prompt per line, relative to the repo rather than to `VIDEOS`, which often points at an external drive. Captions come from the index; `ARGS=--captions /videos/captions.csv` reads a `mm caption` sidecar instead.
 
 ```
 Pull-ups
@@ -24,7 +26,7 @@ A caption carries four axes and a query constrains only the ones it names. Two o
 | --- | --- | --- |
 | `mock` | word overlap | none; a baseline that must be beaten |
 | `laya` | a 421M decision model, Apache-2.0, run locally on CPU | CPU time, about a second per segment |
-| `jev` | a hosted decision model, same typed questions | metered; needs `TYPESAFE_API_KEY` |
+| `jev` | a hosted decision model, same typed questions | metered; needs `TYPESAFE_API_KEY` in `.env` (see `.env.example`) |
 
 Both classifiers answer a typed yes/no question per segment and return a calibrated probability, which is why a query can match a caption that shares none of its words. Word overlap cannot: on this corpus `Descent` and `Swing gainer` score 0.000 against every segment, because no caption uses those words.
 
