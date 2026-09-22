@@ -197,8 +197,9 @@ docker run --rm moment-miner:dev     # run the test suite
 
 Day to day, the Makefile wraps all of this: `make test`, `make index
 VIDEOS=/path`, `make search Q="kong vault"`, `make mine Q="..." OUT=clips`,
-`make annotate TEMPLATE=parkour`, `make eval`, `make serve`, `make shell` —
-add `GPUS=--gpus=all` on a GPU box.
+`make annotate TEMPLATE=parkour`, `make eval`, `make probe PROMPTS=my.txt`,
+`make serve`, `make shell` — add `GPUS=--gpus=all` on a GPU box. API keys go in
+`.env`, git-ignored; copy `.env.example` and fill in what you need.
 
 **Vast.ai:** either push the image (`docker tag moment-miner
 <user>/moment-miner && docker push <user>/moment-miner`) and use it as the
