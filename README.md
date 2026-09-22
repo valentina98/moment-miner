@@ -199,7 +199,10 @@ Day to day, the Makefile wraps all of this: `make test`, `make index
 VIDEOS=/path`, `make search Q="kong vault"`, `make mine Q="..." OUT=clips`,
 `make annotate TEMPLATE=parkour`, `make eval`, `make probe PROMPTS=my.txt`,
 `make serve`, `make shell` — add `GPUS=--gpus=all` on a GPU box. API keys go in
-`.env`, git-ignored; copy `.env.example` and fill in what you need.
+`.env`, git-ignored; copy `.env.example` and fill in what you need. Footage is
+mounted read-only and never copied; `DATA` and `CACHE` take a docker volume name
+or an absolute path, so the index and the model weights can sit on the same
+drive as the footage.
 
 **Vast.ai:** either push the image (`docker tag moment-miner
 <user>/moment-miner && docker push <user>/moment-miner`) and use it as the
