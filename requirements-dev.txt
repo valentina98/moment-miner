@@ -1,1 +1,1 @@
--e .[asr,caption,siglip,smartcut,dev]
+-e .[asr,caption,rank,siglip,smartcut,dev]

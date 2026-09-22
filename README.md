@@ -25,7 +25,7 @@ make shell                   # bash inside the container, mm on PATH
 ```
 
 The `mm` CLI itself — inside `make shell`, on a GPU box, or any machine with
-the package and ffmpeg installed (`pip install -e ".[asr,siglip,smartcut]"`):
+the package and ffmpeg installed (`pip install -e ".[asr,caption,rank,siglip,smartcut]"`):
 
 ```
 $ mm index /archive/parkour
@@ -208,7 +208,7 @@ the on-start script:
 
 ```bash
 apt-get update && apt-get install -y ffmpeg
-git clone <repo-url> /app && pip install -e "/app[asr,siglip,smartcut]"
+git clone <repo-url> /app && pip install -e "/app[asr,caption,rank,siglip,smartcut]"
 ```
 
 CUDA is picked up automatically by both faster-whisper and torch.
