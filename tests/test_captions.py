@@ -496,3 +496,26 @@ def test_prompt_comments_are_not_sent_to_the_model():
     text = load_prompt("parkour")
     assert "#" not in text.splitlines()[0]
     assert text.startswith("These {n} images")
+
+
+def test_clip_level_axes_are_voted_over_the_clip(tmp_path):
+    sc = CaptionSidecar(tmp_path / "a.mp4")
+    for i, (scene, light) in enumerate(
+            [("a park", "sunny"), ("a park", "sunny"), ("a park", "overcast")]):
+        sc.put(f"vid:{i}.0", float(i), float(i) + 8,
+               {"action": f"move {i}", "who": "one person",
+                "scene": scene, "light": light}, "mock")
+    sc.vote()
+    assert [sc.get(f"vid:{i}.0")["light"] for i in range(3)] == ["sunny"] * 3
+    # The window-level axes are untouched.
+    assert [sc.get(f"vid:{i}.0")["action"] for i in range(3)] == [
+        "move 0", "move 1", "move 2"]
+
+
+def test_an_abstention_never_wins_the_vote(tmp_path):
+    sc = CaptionSidecar(tmp_path / "b.mp4")
+    for i, light in enumerate(["unclear", "unclear", "night"]):
+        sc.put(f"v:{i}.0", float(i), float(i) + 8,
+               {"action": "x", "who": "nobody", "scene": "s", "light": light}, "mock")
+    sc.vote()
+    assert sc.get("v:0.0")["light"] == "night"

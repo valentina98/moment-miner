@@ -34,6 +34,8 @@ A longer budget turns the label into a description: *"Graffiti-covered concrete 
 
 ## What the label carries, and how to change it
 
+Running your own prompts against a caption set, and comparing rankers: .
+
 **The label is the retrieval surface: what it names is what can be found.** No ranker recovers an axis the caption never mentions — not BM25, not an embedding, not a reranker. So this list is a choice about which searches are possible, and it is meant to be revisited when the task changes.
 
 | Axis | Why it is in |

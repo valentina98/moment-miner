@@ -19,7 +19,7 @@ from .frames import FRAME_H, FRAME_W, extract_stills, extract_windows
 from .manifest import Manifest
 from .motion import moving_fraction
 from .probe import probe
-from .store import MotionStore, SegmentStore
+from .store import AxisStore, MotionStore, SegmentStore
 
 DEFAULT_WIN = 8.0
 DEFAULT_STRIDE = 4.0
@@ -105,6 +105,7 @@ def index_pending(
     caption_backend: CaptionBackend | None = None,
     caption_dir=None,
     motion_store: MotionStore | None = None,
+    axis_store: AxisStore | None = None,
     caption_frames: int | None = None,
     caption_frames_short: int | None = None,
     caption_frames_long: int | None = None,
@@ -180,7 +181,21 @@ def index_pending(
             if not rows:
                 raise RuntimeError(f"no readable windows ({unreadable} failed)")
             if sidecar is not None:
+                sidecar.vote()
                 sidecar.flush()
+                axis_rows = []
+                for row in rows:
+                    voted = sidecar.get(row["id"])
+                    if voted is not None:
+                        spoken = manifest.transcript_between(
+                            row["video_id"], row["t0"], row["t1"])
+                        row["text"] = f"{spoken} {joined(voted)}".strip()
+                        axis_rows.append({"id": row["id"], "path": path,
+                                          "t0": row["t0"], "t1": row["t1"],
+                                          **voted})
+                if axis_store is not None:
+                    axis_store.delete_path(path)
+                    axis_store.add(axis_rows)
             store.delete_path(path)
             store.add(rows)
             if motion_store is not None:
@@ -208,6 +223,7 @@ def caption_indexed(
     frame_w: int = 640,
     frame_h: int = 360,
     caption_dir=None,
+    axis_store: AxisStore | None = None,
     caption_frames: int | None = None,
     caption_frames_short: int | None = None,
     caption_frames_long: int | None = None,
@@ -273,7 +289,24 @@ def caption_indexed(
             log(f"    ERROR: {e}")
         finally:
             # Captions already paid for are kept even when a later one fails.
+            sidecar.vote()
             sidecar.flush()
+            # The vote can change rows already written, so the store is
+            # refreshed from the sidecar rather than from the per-segment pass.
+            axis_rows = []
+            for r in rows:
+                voted = sidecar.get(r["id"])
+                if voted is None:
+                    continue
+                text = (f"{manifest.transcript_between(r['video_id'], r['t0'], r['t1'])} "
+                        f"{joined(voted)}").strip()
+                if text != r["text"]:
+                    store.set_text(r["id"], text)
+                axis_rows.append({"id": r["id"], "path": path,
+                                  "t0": r["t0"], "t1": r["t1"], **voted})
+            if axis_store is not None:
+                axis_store.delete_path(path)
+                axis_store.add(axis_rows)
     if counts["captioned"] or counts["reused"]:
         store.rebuild_fts()
     return counts

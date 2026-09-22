@@ -9,7 +9,7 @@ Label it for a search index: what someone would type to find this clip again, no
 
 Reply with one line and nothing else: the four parts below, comma-separated, in this order. Every part is filled.
 
-- action: the move, named as a move rather than as someone doing it: "vault over a rail", not "person vaulting over rail". 2-6 words. If nothing happens, the scene's state: "empty skatepark".
+- action: the move, named as a move rather than as someone doing it: "vault over a rail", not "person vaulting over rail". Use the move's own name only when the move is unmistakable: a kong vault, a swing gainer. Never reach for a name to avoid plain words. 2-6 words. If nothing happens, the scene's state: "empty skatepark".
 - who: nobody, one person, two people, a group, or "one person with a dog".
 - scene: where it is, 2-8 words, concrete enough to search: "parkour park with rails", not "outdoors".
 - light: one of: sunny, overcast, golden hour, dusk/dawn, night, floodlit, indoors.

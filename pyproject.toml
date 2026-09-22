@@ -18,6 +18,8 @@ asr = ["faster-whisper>=1.0"]
 # brotli: the base image ships 1.1.0, whose Decompressor rejects a keyword that
 # anthropic's HTTP client passes, so every caption call fails.
 caption = ["anthropic>=1.0", "brotli>=1.2", "pillow>=10.0"]
+# A local text classifier for `mm probe`: 421M, Apache-2.0, CPU-only here.
+rank = ["laya>=0.1"]
 siglip = ["torch>=2.2", "transformers>=4.49", "pillow>=10.0"]
 # Pinned: smartcut was deprecated 2026-02 and PyAV is an exact pin of its own.
 smartcut = ["smartcut==1.7"]
