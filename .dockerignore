@@ -3,7 +3,6 @@ refs/
 mm_data/
 .git/
 .claude/
-.env
 __pycache__/
 *.egg-info/
 .pytest_cache/

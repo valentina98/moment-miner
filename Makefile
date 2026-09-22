@@ -3,10 +3,7 @@ VIDEOS  ?= examples
 Q        ?= kong vault
 K        ?= 10
 OUT      ?= clips
-# Both take a docker volume name or an absolute host path, so an index and the
-# model weights can live on the drive that holds the footage.
 DATA     ?= mm_data
-CACHE    ?= mm-hf-cache
 SUB      ?= .
 # Both are paths under VIDEOS: SUB is the folder to index, LABELS the eval set.
 # Ground truth lives beside the footage, so `eval` wants VIDEOS=footage while
@@ -44,7 +41,7 @@ RUN = docker run --rm $(GPUS) \
 	-e ANTHROPIC_API_KEY \
 	-e TYPESAFE_API_KEY \
 	-v $(abspath $(VIDEOS)):/videos:ro \
-	-v $(CACHE):/root/.cache \
+	-v mm-hf-cache:/root/.cache \
 	-v $(DATA):/data
 
 # Captions are cached beside the footage, so this one target mounts the archive
@@ -83,7 +80,7 @@ mine: image
 annotate: image
 	docker run --rm -it \
 		-v $(abspath $(VIDEOS)):/videos \
-		-v $(CACHE):/root/.cache -v $(DATA):/data \
+		-v mm-hf-cache:/root/.cache -v $(DATA):/data \
 		$(IMAGE) annotate /videos --template $(TEMPLATE)
 
 eval: image
