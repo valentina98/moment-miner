@@ -5,6 +5,7 @@ venv/
 mm_data/
 .claude/tmp/
 .claude/settings.local.json
+CLAUDE.md
 .env
 .pytest_cache/
 examples/*

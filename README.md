@@ -35,6 +35,8 @@ $ mm mine "kong vault" /archive/parkour -k 5
 
 `*_mined` folders are never re-ingested by the indexer, so exports can't pollute the index.
 
+A `.llc` project names its video by a path relative to the project file, which is how LosslessCut resolves it, so a video folder and its `llc/` subfolder can be moved together.
+
 ## Commands
 
 | Command | Purpose |
@@ -80,6 +82,8 @@ export ─► smartcut: frame-accurate at both ends, only the boundary GOPs
   recoded, interior passed through bit-identically · --no-smart falls back
   to ffmpeg -c copy snapped to a keyframe (may start one GOP early)
 ```
+
+Transcripts are filtered: Whisper segments with `no_speech_prob` of 0.66 or more, or `avg_logprob` of -1.0 or less, are dropped (`moment_miner/asr.py`), because Whisper invents captions over music. Change the thresholds only with an `mm eval` run to compare.
 
 Embedding backends are pluggable (`moment_miner/embeddings/`):
 
