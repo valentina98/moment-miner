@@ -195,6 +195,10 @@ docker build -t moment-miner:dev .   # dev image (adds tests + pytest)
 docker run --rm moment-miner:dev     # run the test suite
 ```
 
+Footage is mounted read-only and never copied. `DATA` and `CACHE` take a docker
+volume name or an absolute path, so the index and the model weights can sit on
+the same drive as the footage rather than on the system disk.
+
 Day to day, the Makefile wraps all of this: `make test`, `make index
 VIDEOS=/path`, `make search Q="kong vault"`, `make mine Q="..." OUT=clips`,
 `make annotate TEMPLATE=parkour`, `make eval`, `make serve`, `make shell` —
