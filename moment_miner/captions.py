@@ -16,6 +16,7 @@ import io
 import json
 import os
 from abc import ABC, abstractmethod
+from collections import Counter
 from datetime import date
 from importlib.resources import files as pkg_files
 from pathlib import Path
@@ -38,13 +39,87 @@ SHORT_VIDEO_S = 8.0
 LONG_VIDEO_S = 120.0
 FRAME_WIDTH = 640
 
+AXES = ("action", "who", "scene", "light")
+UNKNOWN = "unclear"
+# Closed set: light is a filter, and a filter with synonyms in it misses rows.
+LIGHTS = ("sunny", "overcast", "golden hour", "dusk/dawn", "night", "floodlit",
+          "indoors")
+
 DEFAULT_PROMPT = "general"
+
+
+def parse_axes(reply: str) -> dict[str, str]:
+    """A model's reply -> one value per axis, never empty.
+
+    JSON is what the shipped prompts ask for, because a named key cannot be
+    mistaken for the one beside it. The comma fallback exists for models that
+    cannot hold a format, and it is positional, so it is the lossy path: a
+    comma inside a value shifts everything after it.
+    """
+    text = reply.strip()
+    # The shipped prompts ask for the comma form, not JSON, because the format
+    # changes what the model writes: with identical rules, a JSON value came
+    # back as a descriptive phrase ("person vaulting over a rail") on 9 of 131
+    # segments, and a comma-separated label on 0 of 131. JSON is still accepted
+    # because a model that volunteers it should not be a parse failure, and
+    # because models fence it in ```json blocks unprompted — so take the
+    # outermost braces rather than trusting the reply to start with one.
+    start, end = text.find("{"), text.rfind("}")
+    if start != -1 and end > start:
+        try:
+            got = json.loads(text[start:end + 1])
+        except json.JSONDecodeError:
+            got = {}
+    else:
+        parts = [p.strip() for p in text.split(",")]
+        got = dict(zip(AXES, parts))
+    axes = {a: str(got.get(a) or UNKNOWN).strip() or UNKNOWN for a in AXES}
+    axes["light"] = _light(axes["light"])
+    return axes
+
+
+def _light(value: str) -> str:
+    """Hold `light` to its enum. Models drop half of `dusk/dawn` and invent
+    neighbours like `daylight`; a filter cannot afford either."""
+    v = value.strip().lower()
+    if v in LIGHTS:
+        return v
+    return next((L for L in LIGHTS if v and (v in L or L.startswith(v))), UNKNOWN)
+
+
+# Axes that are a property of the clip, not of the window: a take does not
+# change its lighting, and it rarely changes location. Asking per window means
+# re-guessing a constant, and the guesses disagreed on 3 of 15 clips.
+CLIP_AXES = ("scene", "light")
+
+
+def vote_clip_axes(rows: list[dict]) -> dict[str, str]:
+    """The value each clip-level axis should carry, by plurality of its windows.
+
+    `unclear` never wins: it is an abstention, so it is only the answer when a
+    clip has nothing else to offer.
+    """
+    out = {}
+    for axis in CLIP_AXES:
+        counts = Counter(r[axis] for r in rows if r.get(axis) and r[axis] != UNKNOWN)
+        out[axis] = counts.most_common(1)[0][0] if counts else UNKNOWN
+    return out
+
+
+def joined(axes: dict[str, str]) -> str:
+    """The searchable one-line form, and what a person reads."""
+    return ", ".join(axes[a] for a in AXES)
 
 
 def prompt_names() -> list[str]:
     tdir = pkg_files("moment_miner") / "templates"
     return sorted(f.name[len("caption_"):-len(".txt")]
                   for f in tdir.iterdir() if f.name.startswith("caption_"))
+
+
+def _strip_comments(text: str) -> str:
+    """`#` lines carry why a prompt is worded as it is; the model never sees them."""
+    return "".join(l for l in text.splitlines(True) if not l.startswith("#")).lstrip()
 
 
 def load_prompt(name_or_path: str = DEFAULT_PROMPT) -> str:
@@ -56,12 +131,12 @@ def load_prompt(name_or_path: str = DEFAULT_PROMPT) -> str:
     """
     path = Path(name_or_path)
     if path.suffix and path.exists():
-        return path.read_text(encoding="utf-8")
+        return _strip_comments(path.read_text(encoding="utf-8"))
     shipped = pkg_files("moment_miner") / "templates" / f"caption_{name_or_path}.txt"
     if not shipped.is_file():
         raise ValueError(f"unknown caption prompt: {name_or_path!r} "
                          f"(shipped: {', '.join(prompt_names())}, or give a file path)")
-    return shipped.read_text(encoding="utf-8")
+    return _strip_comments(shipped.read_text(encoding="utf-8"))
 
 
 
@@ -76,8 +151,8 @@ class CaptionBackend(ABC):
 
     @abstractmethod
     def caption(self, frames: np.ndarray, span: float,
-                n_frames: int | None = None, stride: float = 4.0) -> str:
-        """(k, h, w, 3) uint8 frames of one segment -> one sentence."""
+                n_frames: int | None = None, stride: float = 4.0) -> dict[str, str]:
+        """(k, h, w, 3) uint8 frames of one segment -> one value per axis."""
 
     def preflight(self) -> None:
         """Resolve credentials before indexing starts.
@@ -94,9 +169,10 @@ class MockCaptionBackend(CaptionBackend):
     name = "mock"
 
     def caption(self, frames: np.ndarray, span: float,
-                n_frames: int | None = None, stride: float = 4.0) -> str:
+                n_frames: int | None = None, stride: float = 4.0) -> dict[str, str]:
         picked = subsample(frames, span, stride, n_frames)
-        return f"mock caption of {len(picked)} frames over {span:.1f}s"
+        return {"action": f"mock caption of {len(picked)} frames",
+                "who": "one person", "scene": f"over {span:.1f}s", "light": "daylight"}
 
 
 def sample_points(span: float, stride: float) -> list[float]:
@@ -307,10 +383,11 @@ class ClaudeCaptionBackend(CaptionBackend):
         text = " ".join(
             b.text.strip() for b in response.content if b.type == "text"
         ).strip()
-        # A label is not a sentence, so its first character is lowercased
-        # here rather than asked for in the prompt: normalising in code is
-        # the same for every backend and cannot drift between runs.
-        return text[:1].lower() + text[1:]
+        axes = parse_axes(text)
+        # A label is not a sentence, so each value's first character is
+        # lowercased here rather than asked for in the prompt: normalising in
+        # code is the same for every backend and cannot drift between runs.
+        return {a: v[:1].lower() + v[1:] for a, v in axes.items()}
 
 
 def get_caption_backend(name: str, **kwargs) -> CaptionBackend:
@@ -325,7 +402,7 @@ def get_caption_backend(name: str, **kwargs) -> CaptionBackend:
 
 
 SIDECAR_NAME = "captions.csv"
-SIDECAR_COLUMNS = ["id", "t0", "t1", "caption", "model", "written"]
+SIDECAR_COLUMNS = ["id", "t0", "t1", *AXES, "caption", "model", "written"]
 
 
 class CaptionSidecar:
@@ -350,14 +427,21 @@ class CaptionSidecar:
                 self.rows = {r["id"]: r for r in csv.DictReader(f)}
         self._dirty = False
 
-    def get(self, seg_id: str) -> str | None:
+    def get(self, seg_id: str) -> dict[str, str] | None:
         row = self.rows.get(seg_id)
-        return row["caption"] if row else None
+        if not row:
+            return None
+        if row.get("action"):
+            return {a: row[a] for a in AXES}
+        # Rows written before the axes existed carry only the joined caption.
+        return parse_axes(row["caption"])
 
-    def put(self, seg_id: str, t0: float, t1: float, caption: str, model: str) -> None:
+    def put(self, seg_id: str, t0: float, t1: float, axes: dict[str, str],
+            model: str) -> None:
         self.rows[seg_id] = {
-            "id": seg_id, "t0": f"{t0:.1f}", "t1": f"{t1:.1f}",
-            "caption": caption, "model": model, "written": date.today().isoformat(),
+            "id": seg_id, "t0": f"{t0:.1f}", "t1": f"{t1:.1f}", **axes,
+            "caption": joined(axes), "model": model,
+            "written": date.today().isoformat(),
         }
         self._dirty = True
 
@@ -378,6 +462,19 @@ class CaptionSidecar:
                 "The archive is mounted read-only — use `make caption`, which mounts "
                 "it read-write, or pass --caption-dir."
             ) from e
+
+    def vote(self) -> None:
+        """Collapse the clip-level axes, per video, over the rows held here."""
+        by_video: dict[str, list[dict]] = {}
+        for row in self.rows.values():
+            by_video.setdefault(row["id"].split(":")[0], []).append(row)
+        for rows in by_video.values():
+            won = vote_clip_axes(rows)
+            for row in rows:
+                if any(row[a] != won[a] for a in CLIP_AXES):
+                    row.update(won)
+                    row["caption"] = joined(row)
+                    self._dirty = True
 
     def flush(self) -> None:
         if not self._dirty:

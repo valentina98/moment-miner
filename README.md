@@ -25,7 +25,7 @@ make shell                   # bash inside the container, mm on PATH
 ```
 
 The `mm` CLI itself — inside `make shell`, on a GPU box, or any machine with
-the package and ffmpeg installed (`pip install -e ".[asr,siglip,smartcut]"`):
+the package and ffmpeg installed (`pip install -e ".[asr,caption,rank,siglip,smartcut]"`):
 
 ```
 $ mm index /archive/parkour
@@ -201,8 +201,9 @@ the same drive as the footage rather than on the system disk.
 
 Day to day, the Makefile wraps all of this: `make test`, `make index
 VIDEOS=/path`, `make search Q="kong vault"`, `make mine Q="..." OUT=clips`,
-`make annotate TEMPLATE=parkour`, `make eval`, `make serve`, `make shell` —
-add `GPUS=--gpus=all` on a GPU box.
+`make annotate TEMPLATE=parkour`, `make eval`, `make probe PROMPTS=my.txt`,
+`make serve`, `make shell` — add `GPUS=--gpus=all` on a GPU box. API keys go in
+`.env`, git-ignored; copy `.env.example` and fill in what you need.
 
 **Vast.ai:** either push the image (`docker tag moment-miner
 <user>/moment-miner && docker push <user>/moment-miner`) and use it as the
@@ -211,7 +212,7 @@ the on-start script:
 
 ```bash
 apt-get update && apt-get install -y ffmpeg
-git clone <repo-url> /app && pip install -e "/app[asr,siglip,smartcut]"
+git clone <repo-url> /app && pip install -e "/app[asr,caption,rank,siglip,smartcut]"
 ```
 
 CUDA is picked up automatically by both faster-whisper and torch.

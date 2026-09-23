@@ -9,7 +9,7 @@ import click
 from .locate import LOCATORS
 from .manifest import Manifest
 from .motion import STATIC_MAX
-from .store import MotionStore, SegmentStore
+from .store import AxisStore, MotionStore, SegmentStore
 from .timefmt import fmt_ts, parse_ts
 
 
@@ -21,6 +21,12 @@ from .timefmt import fmt_ts, parse_ts
 def main(ctx, data_dir):
     """Moment Miner: search large video archives, export lossless clips."""
     ctx.obj = Path(data_dir)
+
+
+def _ranker_names() -> list[str]:
+    from .rankers import ranker_names
+
+    return ranker_names()
 
 
 def _prompt_names() -> list[str]:
@@ -108,6 +114,7 @@ def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex,
         result = index_pending(
             manifest, store, be, use_asr=asr, asr_model=asr_model,
             motion_store=MotionStore(data_dir),
+            axis_store=AxisStore(data_dir),
             win=window, stride=stride, log=click.echo,
             caption_backend=get_caption_backend(
                 caption, allow_paid=allow_paid, prompt=caption_prompt,
@@ -181,6 +188,7 @@ def caption(data_dir, folder, model, backend, frame_size, caption_dir,
             Manifest(data_dir / "manifest.db"), store,
             get_caption_backend(model, prompt=caption_prompt),
             folder, frame_w=frame_size[0], frame_h=frame_size[1],
+            axis_store=AxisStore(data_dir),
             caption_dir=caption_dir, caption_frames=caption_frames,
             caption_frames_short=caption_frames_short,
             caption_frames_long=caption_frames_long,
@@ -507,6 +515,64 @@ def status(data_dir, show_errors):
     if show_errors:
         for row in manifest.errors():
             click.echo(f"  {row['path']}: {row['error']}")
+
+
+@main.command(
+    epilog="Rankers: " + ", ".join(_ranker_names()))
+@click.argument("prompts", type=click.Path(exists=True, dir_okay=False))
+@click.option("--captions", "captions_path", default=None,
+              type=click.Path(exists=True, dir_okay=False),
+              help="A captions.csv written by `mm caption`. Defaults to the "
+                   "axes already in the index.")
+@click.option("--axis", default="caption", show_default=True,
+              type=click.Choice(["caption", "action", "who", "scene", "light"]),
+              help="Which axis each prompt is scored against.")
+@click.option("--ranker", default="mock", show_default=True,
+              help="How to score. See the list below.")
+@click.option("-k", default=5, show_default=True, help="Hits shown per prompt.")
+@click.option("--backend", default="siglip", show_default=True,
+              help="Which index to read video names from.")
+@click.pass_obj
+def probe(data_dir, prompts, captions_path, axis, ranker, k, backend):
+    """Run a file of free-form prompts against a caption set.
+
+    `mm eval` scores the label set, which has ground truth and twelve rows.
+    This answers the other question — whether the words you would actually
+    type find the moment — and it has no ground truth, so it prints hits to
+    read rather than a number to quote.
+    """
+    import csv as _csv
+
+    from .rankers import get_ranker
+
+    if captions_path:
+        rows = list(_csv.DictReader(open(captions_path, newline="")))
+    else:
+        rows = AxisStore(data_dir).all()
+    if not rows:
+        raise click.ClickException(
+            f"no captions in {captions_path}" if captions_path
+            else "no axes in the index — run `mm caption` first, or pass --captions")
+    # A segment id is a hash, which answers nothing on its own. The index
+    # knows which file it came from, so a hit names a video you can open.
+    try:
+        names = {s["id"]: Path(s["path"]).name
+                 for s in SegmentStore(data_dir, backend).segments()}
+    except Exception:
+        names = {}
+    try:
+        r = get_ranker(ranker)
+    except ValueError as e:
+        raise click.UsageError(str(e)) from e
+    queries = [q.strip() for q in open(prompts)
+               if q.strip() and not q.startswith("#")]
+    for q in queries:
+        click.echo(f"\n{q}")
+        for hit in r.top(q, rows, k=k, axis=axis):
+            where = names.get(hit["id"], hit["id"].split(":")[0])
+            click.echo(f"  {hit['score']:.3f}  {where} "
+                       f"{float(hit['t0']):.0f}-{float(hit['t1']):.0f}s  "
+                       f"{hit.get(axis, '')}")
 
 
 if __name__ == "__main__":

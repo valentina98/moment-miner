@@ -5,7 +5,9 @@ venv/
 mm_data/
 .claude/tmp/
 .claude/settings.local.json
+.env
 .pytest_cache/
-examples
+examples/*
+!examples/README.md
 refs/
 footage/
