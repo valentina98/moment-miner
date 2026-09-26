@@ -18,7 +18,7 @@ They are separate files on purpose. **Captions are machine-written indexed conte
 
 Columns: `id,t0,t1,caption,model,written`.
 
-Captions are read back on the next pass. Re-indexing a folder — including `--reindex` — reuses the captions already on disk and only spends on segments that don't have one. This is why they live next to the footage rather than in `mm_data`: a caption costs session quota (money only on the API-key route), and a deleted volume means a re-index, not a second caption pass.
+Captions are read back on the next pass. Re-indexing a folder — including `--reindex` — reuses the captions already on disk and only spends on segments that don't have one. Re-indexing without `--caption` spends nothing and keeps each segment's stored caption in its searchable text, as long as the segment geometry is unchanged. This is why they live next to the footage rather than in `mm_data`: a caption costs session quota (money only on the API-key route), and a deleted volume means a re-index, not a second caption pass.
 
 ## The method
 
