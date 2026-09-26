@@ -66,7 +66,7 @@ index: image
 	$(RUN) $(IMAGE) index /videos/$(SUB) $(ARGS)
 
 caption: image
-	$(TOKEN_FILE) $(RUN_RW) $(TOKEN_MOUNT) $(IMAGE) index /videos/$(SUB) --caption $(CAPTION_MODEL) --caption-prompt $(CAPTION_PROMPT)
+	$(TOKEN_FILE) $(RUN_RW) $(TOKEN_MOUNT) $(IMAGE) index /videos/$(SUB) --caption $(CAPTION_MODEL) --caption-prompt $(CAPTION_PROMPT) $(ARGS)
 
 # Captions an index that already exists, without re-embedding it.
 recaption: image
