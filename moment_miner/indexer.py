@@ -196,6 +196,13 @@ def index_pending(
                 if axis_store is not None:
                     axis_store.delete_path(path)
                     axis_store.add(axis_rows)
+            elif axis_store is not None:
+                # Re-embedding without a caption pass keeps the captions the
+                # segments already have; ids only survive an unchanged geometry.
+                stored = axis_store.get([r["id"] for r in rows])
+                for row in rows:
+                    if row["id"] in stored:
+                        row["text"] = f"{row['text']} {joined(stored[row['id']])}".strip()
             store.delete_path(path)
             store.add(rows)
             if motion_store is not None:
