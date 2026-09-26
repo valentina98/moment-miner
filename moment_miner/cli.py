@@ -64,7 +64,7 @@ def help_cmd(ctx, command):
               help="Re-process videos even if already indexed.")
 @click.option("--estimate/--no-estimate", default=True, show_default=True,
               help="Print an ETA first. The first run on a machine measures its "
-                   "speed once (`mm calibrate`, about a minute).")
+                   "speed once on 24 s of the first video (`mm calibrate`).")
 @click.option("--caption", default=None,
               help="Caption each segment with a Claude model (e.g. "
                    "claude-haiku-4-5) and add it to the searchable text. "
@@ -154,7 +154,7 @@ def _estimate(data_dir, be, pending, window, stride, extras):
     if rate is None:
         click.echo("calibrating: first index on this machine, measuring its "
                    "speed once (about a minute)...")
-        rate = calibrate(data_dir, be, log=click.echo)
+        rate = calibrate(data_dir, be, pending[0]["path"], log=click.echo)
     try:
         segments, seconds, eta = estimate(pending, rate, window, stride)
     except Exception as e:
@@ -168,17 +168,19 @@ def _estimate(data_dir, be, pending, window, stride, extras):
 
 
 @main.command()
+@click.argument("video", type=click.Path(exists=True, dir_okay=False))
 @click.option("--backend", default="siglip", show_default=True)
 @click.pass_obj
-def calibrate(data_dir, backend):
-    """Measure this machine's index speed, for `mm index` estimates.
+def calibrate(data_dir, video, backend):
+    """Measure this machine's index speed on the first seconds of VIDEO.
 
-    Runs by itself on the first index; run it again after a hardware change.
+    Pick a video from the camera you index most. `mm index` runs this by
+    itself on the first video it indexes; run it again after a hardware change.
     """
     from .calibrate import calibrate as run
     from .embeddings import get_backend
 
-    run(data_dir, get_backend(backend), log=click.echo)
+    run(data_dir, get_backend(backend), video, log=click.echo)
 
 
 def _forget_missing(manifest, counts, data_dir, backend_name, folder):

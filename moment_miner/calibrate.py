@@ -2,9 +2,12 @@
 
 Index time is almost all per-segment work (decode 8 frames, embed them), so
 one rate -- seconds per segment -- predicts a run from its segment count.
-The rate is measured by indexing a generated 4K clip, the resolution the
-footage is shot at, and stored in the data dir keyed by machine and backend:
-a data dir moved to another machine gets a fresh measurement there.
+The rate is measured on the first seconds of a real video, stream-copied so
+nothing is re-encoded: decode cost follows the camera's codec, frame rate and
+bitrate, and generated clips measured 30% fast (easy to decode) or 20% slow
+(noise) against the same machine's real run. It is stored in the data dir
+keyed by machine and backend, so a data dir moved to another machine gets a
+fresh measurement there.
 """
 
 import json
@@ -21,7 +24,7 @@ from .manifest import Manifest
 from .probe import probe
 from .store import SegmentStore
 
-CLIP = {"size": "3840x2160", "rate": 25, "seconds": 32}
+SAMPLE_S = 24.0
 
 
 def machine_key() -> str:
@@ -59,19 +62,18 @@ def load_rate(data_dir, backend_name: str) -> dict | None:
     return entries.get(f"{machine_key()} / {backend_name}")
 
 
-def calibrate(data_dir, backend, log=print, clip: dict = CLIP) -> dict:
-    """Index a generated clip with `backend` and store seconds per segment."""
+def calibrate(data_dir, backend, video, log=print, seconds: float = SAMPLE_S) -> dict:
+    """Index the first `seconds` of `video` with `backend`; store s/segment."""
     with tempfile.TemporaryDirectory() as tmp:
-        folder = Path(tmp) / "clip"
+        folder = Path(tmp) / "sample"
         folder.mkdir()
-        out = folder / "calibration.mp4"
+        sample = folder / f"sample{Path(video).suffix}"
         subprocess.run(
-            [ffmpeg_exe(), "-v", "error", "-y", "-f", "lavfi", "-i",
-             f"testsrc2=size={clip['size']}:rate={clip['rate']}"
-             f":duration={clip['seconds']}",
-             "-c:v", "libx264", "-preset", "ultrafast", str(out)],
+            [ffmpeg_exe(), "-v", "error", "-y", "-t", f"{seconds}", "-i", str(video),
+             "-map", "0:v:0", "-c", "copy", str(sample)],
             check=True, capture_output=True,
         )
+        sampled = probe(str(sample))["duration"]
         manifest = Manifest(Path(tmp) / "manifest.db")
         manifest.scan(folder)
         t = time.time()
@@ -79,11 +81,11 @@ def calibrate(data_dir, backend, log=print, clip: dict = CLIP) -> dict:
                                backend, use_asr=False, log=lambda *_: None)
         elapsed = time.time() - t
     if not result["segments"]:
-        raise RuntimeError(f"calibration clip produced no segments: {result}")
+        raise RuntimeError(f"calibration sample produced no segments: {result}")
     entry = {
         "s_per_segment": round(elapsed / result["segments"], 2),
         "segments": result["segments"],
-        "clip": f"{clip['size']} {clip['rate']} fps {clip['seconds']} s",
+        "sample": f"first {sampled:.0f} s of {Path(video).name}",
         "measured_at": time.strftime("%Y-%m-%d %H:%M"),
     }
     path = _path(data_dir)
@@ -95,7 +97,7 @@ def calibrate(data_dir, backend, log=print, clip: dict = CLIP) -> dict:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(entries, indent=2) + "\n")
     log(f"calibrated: {entry['s_per_segment']} s per segment "
-        f"({machine_key()}, {backend.name})")
+        f"({machine_key()}, {backend.name}, {entry['sample']})")
     return entry
 
 
