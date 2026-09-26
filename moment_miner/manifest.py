@@ -54,6 +54,10 @@ def _settings_match(row: sqlite3.Row | None, settings: dict) -> bool:
     return row is not None and all(row[c] == settings[c] for c in SETTINGS_COLUMNS)
 
 
+def _prefix(folder: str | Path) -> str:
+    return str(Path(folder).resolve()).rstrip("/") + "/"
+
+
 def fingerprint(path: str, chunk: int = 1 << 20) -> str:
     # Hash size + first/last MB instead of whole file: archives are TBs.
     st = os.stat(path)
@@ -107,14 +111,16 @@ class Manifest:
 
     def reset(self, folder: str | Path):
         """Mark all videos under folder pending so they re-index."""
-        prefix = str(Path(folder).resolve()).rstrip("/") + "/"
+        prefix = _prefix(folder)
         with self.conn:
             self.conn.execute(
                 "UPDATE videos SET status='pending' WHERE path LIKE ? ESCAPE '\\'",
                 (prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%",),
             )
 
-    def pending(self, settings: dict | None = None) -> list[sqlite3.Row]:
+    def pending(
+        self, settings: dict | None = None, folder: str | Path | None = None
+    ) -> list[sqlite3.Row]:
         """Videos needing work: new, changed, or indexed under other settings.
 
         `settings` is what the caller is about to index with; a done video
@@ -122,12 +128,16 @@ class Manifest:
         re-indexes without `--reindex`. Omit it and only new/changed videos
         come back, which is what a caller that is not about to index wants.
         Errored videos stay out either way -- they need `--reindex`, the same
-        as before.
+        as before. `folder` limits the answer to videos under it, so indexing
+        one folder never touches another.
         """
+        prefix = None if folder is None else _prefix(folder)
         if settings is None:
-            return self.conn.execute(
-                "SELECT * FROM videos WHERE status = 'pending' ORDER BY path"
-            ).fetchall()
+            return [
+                row for row in self.conn.execute(
+                    "SELECT * FROM videos WHERE status = 'pending' ORDER BY path")
+                if prefix is None or row["path"].startswith(prefix)
+            ]
         recorded = {
             r["path"]: r
             for r in self.conn.execute("SELECT * FROM index_settings")
@@ -138,9 +148,21 @@ class Manifest:
                 "SELECT * FROM videos WHERE status IN ('pending', 'done')"
                 " ORDER BY path"
             )
-            if row["status"] == "pending"
-            or not _settings_match(recorded.get(row["path"]), settings)
+            if (prefix is None or row["path"].startswith(prefix))
+            and (row["status"] == "pending"
+                 or not _settings_match(recorded.get(row["path"]), settings))
         ]
+
+    def why_pending(self, row: sqlite3.Row, settings: dict) -> str:
+        """Why `pending(settings)` returned `row`, for the index log."""
+        if row["status"] == "pending":
+            return "new or changed file"
+        recorded = self.recorded_settings(row["path"])
+        if recorded is None:
+            return "no recorded settings"
+        return "settings differ: " + ", ".join(
+            f"{c} {recorded[c]} -> {settings[c]}"
+            for c in SETTINGS_COLUMNS if recorded[c] != settings[c])
 
     def recorded_settings(self, path: str) -> sqlite3.Row | None:
         """What the last index of `path` was built under, or None if unknown."""

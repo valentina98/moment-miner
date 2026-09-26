@@ -290,7 +290,8 @@ def test_indexer_appends_caption_to_the_transcript_text(tmp_path, monkeypatch):
                         lambda path, spans, **k: ((t0, t1, frames(8)) for t0, t1 in spans))
 
     class M:
-        def pending(self, settings=None): return [{"id": "a", "path": str(tmp_path / "a.mp4")}]
+        def pending(self, settings=None, folder=None): return [{"id": "a", "path": str(tmp_path / "a.mp4")}]
+        def why_pending(self, row, settings): return "new or changed file"
         def transcript_between(self, *a): return "spoken words"
         def mark_done(self, *a): pass
         def mark_error(self, *a): raise AssertionError("indexing failed")
@@ -325,7 +326,8 @@ def test_indexer_without_caption_backend_spends_nothing(tmp_path, monkeypatch):
         def caption(self, *a): raise AssertionError("captioned without being asked")
 
     class M:
-        def pending(self, settings=None): return [{"id": "a", "path": str(tmp_path / "a.mp4")}]
+        def pending(self, settings=None, folder=None): return [{"id": "a", "path": str(tmp_path / "a.mp4")}]
+        def why_pending(self, row, settings): return "new or changed file"
         def transcript_between(self, *a): return "spoken words"
         def mark_done(self, *a): pass
         def mark_error(self, *a): raise AssertionError("indexing failed")

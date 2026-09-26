@@ -120,3 +120,27 @@ def test_an_errored_video_stays_out_of_pending(tmp_path):
     m, path = _indexed(tmp_path)
     m.mark_error(path, "RuntimeError: no readable windows")
     assert m.pending(SETTINGS) == [] and m.pending() == []
+
+
+def test_pending_in_a_folder_leaves_other_folders_alone(tmp_path):
+    """Adding footage in a new folder must not re-index the ones already done,
+    even when those are stale."""
+    m, old = _indexed(tmp_path)
+    new = tmp_path / "new"
+    new.mkdir()
+    _fake_video(new / "b.mp4")
+    m.scan(new)
+    stale = {**SETTINGS, "stride": 2.0}
+    assert [r["path"] for r in m.pending(stale, new)] == [str((new / "b.mp4").resolve())]
+    assert old in [r["path"] for r in m.pending(stale)]
+
+
+def test_why_pending_names_the_reason(tmp_path):
+    m, path = _indexed(tmp_path)
+    row = m.pending({**SETTINGS, "stride": 2.0})[0]
+    assert m.why_pending(row, {**SETTINGS, "stride": 2.0}) == "settings differ: stride 4.0 -> 2.0"
+    with m.conn:
+        m.conn.execute("DELETE FROM index_settings")
+    assert m.why_pending(m.pending(SETTINGS)[0], SETTINGS) == "no recorded settings"
+    m.reset(tmp_path / "archive")
+    assert m.why_pending(m.pending(SETTINGS)[0], SETTINGS) == "new or changed file"

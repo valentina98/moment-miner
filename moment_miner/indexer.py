@@ -111,6 +111,7 @@ def index_pending(
     caption_frames_long: int | None = None,
     short_video_s: float = SHORT_VIDEO_S,
     long_video_s: float = LONG_VIDEO_S,
+    folder=None,
     log=print,
 ) -> dict:
     counts = {"indexed": 0, "errors": 0, "segments": 0}
@@ -119,14 +120,15 @@ def index_pending(
     if caption_backend is not None:
         caption_backend.preflight()
     settings = index_settings(backend.name, win, stride, frames_per_window)
-    videos = manifest.pending(settings)
+    videos = manifest.pending(settings, folder)
     for i, row in enumerate(videos, 1):
         vid, path = row["id"], row["path"]
         t_start = time.time()
         try:
             info = probe(path)
             duration = info["duration"]
-            log(f"[{i}/{len(videos)}] {path} ({duration:.0f}s)")
+            log(f"[{i}/{len(videos)}] {path} ({duration:.0f}s): "
+                f"{manifest.why_pending(row, settings)}")
             if use_asr and info["has_audio"]:
                 from .asr import transcribe
 
