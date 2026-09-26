@@ -1,4 +1,5 @@
 import csv
+from collections import Counter
 import json as jsonlib
 import os
 from importlib.resources import files as pkg_files
@@ -101,14 +102,17 @@ def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex,
     """Scan FOLDER recursively and index new/changed videos."""
     from .captions import MissingCaptionCredentials, get_caption_backend
     from .embeddings import get_backend
-    from .indexer import index_pending
+    from .indexer import index_pending, index_settings
 
     manifest = Manifest(data_dir / "manifest.db")
     counts = manifest.scan(folder)
     if reindex:
         manifest.reset(folder)
-    click.echo(f"scan: {counts}")
     be = get_backend(backend)
+    _forget_missing(manifest, counts, data_dir, be.name, folder)
+    click.echo(f"scan: {counts}")
+    _report_stale_elsewhere(
+        manifest, index_settings(be.name, window, stride), folder)
     store = SegmentStore(data_dir, be.name)
     try:
         result = index_pending(
@@ -125,10 +129,47 @@ def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex,
             caption_frames_long=caption_frames_long,
             short_video_s=short_video_s,
             long_video_s=long_video_s,
+            folder=folder,
         )
     except MissingCaptionCredentials as e:
         raise click.ClickException(str(e)) from e
     click.echo(f"done: {result}")
+
+
+def _forget_missing(manifest, counts, data_dir, backend_name, folder):
+    """Drop videos whose file is gone, unless every one under FOLDER is gone.
+
+    All of them missing at once is what a different mount root looks like,
+    not a deletion, and forgetting them would throw the whole index away.
+    """
+    missing = counts.pop("missing")
+    counts["removed"] = 0
+    if not missing:
+        return
+    known = counts["unchanged"] + counts["changed"] + len(missing)
+    if len(missing) == known:
+        click.echo(f"kept: all {len(missing)} indexed video(s) under {folder} are "
+                   "missing -- a different mount root? Nothing removed.")
+        return
+    stores = [SegmentStore(data_dir, backend_name), MotionStore(data_dir),
+              AxisStore(data_dir)]
+    for path in missing:
+        for store in stores:
+            store.delete_path(path)
+        manifest.forget(path)
+        click.echo(f"removed: {path} (file no longer on disk)")
+    if stores[0].count():
+        stores[0].rebuild_fts()
+    counts["removed"] = len(missing)
+
+
+def _report_stale_elsewhere(manifest, settings, folder):
+    inside = {r["path"] for r in manifest.pending(settings, folder)}
+    reasons = Counter(manifest.why_pending(r, settings)
+                      for r in manifest.pending(settings) if r["path"] not in inside)
+    for reason, n in reasons.items():
+        click.echo(f"left as is: {n} video(s) outside {folder} need re-indexing "
+                   f"({reason}); `mm index` on their folder updates them")
 
 
 def _frame_size(ctx, param, value):
@@ -382,13 +423,14 @@ def mine(data_dir, query, folder, output, k, backend, pad, asr, smart):
     from .search import search as run_search
 
     manifest = Manifest(data_dir / "manifest.db")
-    manifest.scan(folder)
     be = get_backend(backend)
+    _forget_missing(manifest, manifest.scan(folder), data_dir, be.name, folder)
     store = SegmentStore(data_dir, be.name)
-    pending = manifest.pending(index_settings(be.name))
+    pending = manifest.pending(index_settings(be.name), folder)
     if pending:
         click.echo(f"indexing {len(pending)} new/changed video(s)…")
-        index_pending(manifest, store, be, use_asr=asr, log=click.echo)
+        index_pending(manifest, store, be, use_asr=asr, folder=folder,
+                      log=click.echo)
     prefix = str(Path(folder).resolve()) + os.sep
     hits = [h for h in run_search(query, be, store, k=50)
             if h["path"].startswith(prefix)][:k]
