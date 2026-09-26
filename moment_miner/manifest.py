@@ -78,14 +78,20 @@ class Manifest:
         self.conn.executescript(_SCHEMA)
 
     def scan(self, folder: str | Path) -> dict:
-        """Register new/changed videos under folder. Returns counts."""
+        """Register new/changed videos under folder. Returns counts.
+
+        `missing` lists known videos under folder whose file is gone; the
+        caller decides whether to `forget` them.
+        """
         counts = {"new": 0, "changed": 0, "unchanged": 0}
+        seen = set()
         for p in sorted(Path(folder).resolve().rglob("*")):
             if not p.is_file() or p.suffix.lower() not in VIDEO_EXTS:
                 continue
             # `mm mine` exports into *_mined folders; never re-ingest them.
             if any(part.endswith("_mined") for part in p.parent.parts):
                 continue
+            seen.add(str(p))
             st = p.stat()
             row = self.conn.execute(
                 "SELECT id, size, mtime FROM videos WHERE path = ?", (str(p),)
@@ -107,7 +113,27 @@ class Manifest:
                     " VALUES (?, ?, ?, ?, 'pending')",
                     (str(p), vid, st.st_size, st.st_mtime),
                 )
+        prefix = _prefix(folder)
+        counts["missing"] = [
+            r["path"] for r in self.conn.execute("SELECT path FROM videos ORDER BY path")
+            if r["path"].startswith(prefix) and r["path"] not in seen
+        ]
         return counts
+
+    def forget(self, path: str):
+        """Drop a video that is no longer on disk."""
+        with self.conn:
+            row = self.conn.execute(
+                "SELECT id FROM videos WHERE path = ?", (path,)).fetchone()
+            if row is None:
+                return
+            self.conn.execute(
+                # A moved file keeps its fingerprint; its transcript stays.
+                "DELETE FROM transcripts WHERE video_id = ? AND NOT EXISTS"
+                " (SELECT 1 FROM videos WHERE id = ? AND path != ?)",
+                (row["id"], row["id"], path))
+            self.conn.execute("DELETE FROM index_settings WHERE path = ?", (path,))
+            self.conn.execute("DELETE FROM videos WHERE path = ?", (path,))
 
     def reset(self, folder: str | Path):
         """Mark all videos under folder pending so they re-index."""

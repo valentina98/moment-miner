@@ -108,8 +108,9 @@ def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex,
     counts = manifest.scan(folder)
     if reindex:
         manifest.reset(folder)
-    click.echo(f"scan: {counts}")
     be = get_backend(backend)
+    _forget_missing(manifest, counts, data_dir, be.name, folder)
+    click.echo(f"scan: {counts}")
     _report_stale_elsewhere(
         manifest, index_settings(be.name, window, stride), folder)
     store = SegmentStore(data_dir, be.name)
@@ -133,6 +134,33 @@ def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex,
     except MissingCaptionCredentials as e:
         raise click.ClickException(str(e)) from e
     click.echo(f"done: {result}")
+
+
+def _forget_missing(manifest, counts, data_dir, backend_name, folder):
+    """Drop videos whose file is gone, unless every one under FOLDER is gone.
+
+    All of them missing at once is what a different mount root looks like,
+    not a deletion, and forgetting them would throw the whole index away.
+    """
+    missing = counts.pop("missing")
+    counts["removed"] = 0
+    if not missing:
+        return
+    known = counts["unchanged"] + counts["changed"] + len(missing)
+    if len(missing) == known:
+        click.echo(f"kept: all {len(missing)} indexed video(s) under {folder} are "
+                   "missing -- a different mount root? Nothing removed.")
+        return
+    stores = [SegmentStore(data_dir, backend_name), MotionStore(data_dir),
+              AxisStore(data_dir)]
+    for path in missing:
+        for store in stores:
+            store.delete_path(path)
+        manifest.forget(path)
+        click.echo(f"removed: {path} (file no longer on disk)")
+    if stores[0].count():
+        stores[0].rebuild_fts()
+    counts["removed"] = len(missing)
 
 
 def _report_stale_elsewhere(manifest, settings, folder):
@@ -395,8 +423,8 @@ def mine(data_dir, query, folder, output, k, backend, pad, asr, smart):
     from .search import search as run_search
 
     manifest = Manifest(data_dir / "manifest.db")
-    manifest.scan(folder)
     be = get_backend(backend)
+    _forget_missing(manifest, manifest.scan(folder), data_dir, be.name, folder)
     store = SegmentStore(data_dir, be.name)
     pending = manifest.pending(index_settings(be.name), folder)
     if pending:
