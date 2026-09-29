@@ -2,6 +2,7 @@ import csv
 from collections import Counter
 import json as jsonlib
 import os
+import time
 from importlib.resources import files as pkg_files
 from pathlib import Path
 
@@ -61,6 +62,9 @@ def help_cmd(ctx, command):
 @click.option("--asr-model", default="small", show_default=True)
 @click.option("--reindex", is_flag=True,
               help="Re-process videos even if already indexed.")
+@click.option("--estimate/--no-estimate", default=True, show_default=True,
+              help="Print an ETA first. The first run on a machine measures its "
+                   "speed once on 24 s of the first video (`mm calibrate`).")
 @click.option("--caption", default=None,
               help="Caption each segment with a Claude model (e.g. "
                    "claude-haiku-4-5) and add it to the searchable text. "
@@ -95,7 +99,7 @@ def help_cmd(ctx, command):
               help="A video at least this many seconds counts as long.")
 @click.pass_obj
 def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex,
-          caption, allow_paid, paid_budget_usd, caption_dir, caption_prompt,
+          estimate, caption, allow_paid, paid_budget_usd, caption_dir, caption_prompt,
           caption_frames,
           caption_frames_short, caption_frames_long, short_video_s,
           long_video_s):
@@ -111,9 +115,13 @@ def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex,
     be = get_backend(backend)
     _forget_missing(manifest, counts, data_dir, be.name, folder)
     click.echo(f"scan: {counts}")
-    _report_stale_elsewhere(
-        manifest, index_settings(be.name, window, stride), folder)
+    settings = index_settings(be.name, window, stride)
+    _report_stale_elsewhere(manifest, settings, folder)
+    pending = manifest.pending(settings, folder)
+    eta = _estimate(data_dir, be, pending, window, stride,
+                    extras=asr or bool(caption)) if estimate and pending else None
     store = SegmentStore(data_dir, be.name)
+    started = time.time()
     try:
         result = index_pending(
             manifest, store, be, use_asr=asr, asr_model=asr_model,
@@ -133,7 +141,46 @@ def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex,
         )
     except MissingCaptionCredentials as e:
         raise click.ClickException(str(e)) from e
-    click.echo(f"done: {result}")
+    took = f"; took {(time.time() - started) / 60:.1f} min"
+    if eta is not None:
+        took += f", estimated {eta / 60:.1f}"
+    click.echo(f"done: {result}{took if pending else ''}")
+
+
+def _estimate(data_dir, be, pending, window, stride, extras):
+    from .calibrate import calibrate, estimate, load_rate
+
+    rate = load_rate(data_dir, be.name)
+    if rate is None:
+        click.echo("calibrating: first index on this machine, measuring its "
+                   "speed once (about a minute)...")
+        rate = calibrate(data_dir, be, pending[0]["path"], log=click.echo)
+    try:
+        segments, seconds, eta = estimate(pending, rate, window, stride)
+    except Exception as e:
+        click.echo(f"estimate: unavailable ({e})")
+        return None
+    note = "; ASR and captioning come on top" if extras else ""
+    click.echo(f"estimate: {len(pending)} video(s), {seconds / 60:.1f} min of "
+               f"video, {segments} segments, ~{eta / 60:.1f} min at "
+               f"{rate['s_per_segment']} s/segment{note}")
+    return eta
+
+
+@main.command()
+@click.argument("video", type=click.Path(exists=True, dir_okay=False))
+@click.option("--backend", default="siglip", show_default=True)
+@click.pass_obj
+def calibrate(data_dir, video, backend):
+    """Measure this machine's index speed on the first seconds of VIDEO.
+
+    Pick a video from the camera you index most. `mm index` runs this by
+    itself on the first video it indexes; run it again after a hardware change.
+    """
+    from .calibrate import calibrate as run
+    from .embeddings import get_backend
+
+    run(data_dir, get_backend(backend), video, log=click.echo)
 
 
 def _forget_missing(manifest, counts, data_dir, backend_name, folder):
