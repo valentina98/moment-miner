@@ -32,8 +32,8 @@ def test_scan_new_unchanged_changed(tmp_path):
     (archive / "notes.txt").write_text("not a video")
 
     m = Manifest(tmp_path / "mm.db")
-    assert m.scan(archive) == {"new": 2, "changed": 0, "unchanged": 0}
-    assert m.scan(archive) == {"new": 0, "changed": 0, "unchanged": 2}
+    assert m.scan(archive) == {"new": 2, "changed": 0, "unchanged": 0, "missing": []}
+    assert m.scan(archive) == {"new": 0, "changed": 0, "unchanged": 2, "missing": []}
 
     _fake_video(archive / "a.mp4", b"y" * 8192)
     os.utime(archive / "a.mp4", (1, 1))
@@ -57,7 +57,7 @@ def test_scan_skips_mined_folders(tmp_path):
     _fake_video(archive / "real.mp4")
     _fake_video(archive / "sub_mined" / "run" / "clip.mp4")
     m = Manifest(tmp_path / "mm.db")
-    assert m.scan(archive) == {"new": 1, "changed": 0, "unchanged": 0}
+    assert m.scan(archive) == {"new": 1, "changed": 0, "unchanged": 0, "missing": []}
 
 
 def test_reset_marks_pending(tmp_path):
@@ -120,3 +120,38 @@ def test_an_errored_video_stays_out_of_pending(tmp_path):
     m, path = _indexed(tmp_path)
     m.mark_error(path, "RuntimeError: no readable windows")
     assert m.pending(SETTINGS) == [] and m.pending() == []
+
+
+def test_pending_in_a_folder_leaves_other_folders_alone(tmp_path):
+    """Adding footage in a new folder must not re-index the ones already done,
+    even when those are stale."""
+    m, old = _indexed(tmp_path)
+    new = tmp_path / "new"
+    new.mkdir()
+    _fake_video(new / "b.mp4")
+    m.scan(new)
+    stale = {**SETTINGS, "stride": 2.0}
+    assert [r["path"] for r in m.pending(stale, new)] == [str((new / "b.mp4").resolve())]
+    assert old in [r["path"] for r in m.pending(stale)]
+
+
+def test_why_pending_names_the_reason(tmp_path):
+    m, path = _indexed(tmp_path)
+    row = m.pending({**SETTINGS, "stride": 2.0})[0]
+    assert m.why_pending(row, {**SETTINGS, "stride": 2.0}) == "settings differ: stride 4.0 -> 2.0"
+    with m.conn:
+        m.conn.execute("DELETE FROM index_settings")
+    assert m.why_pending(m.pending(SETTINGS)[0], SETTINGS) == "no recorded settings"
+    m.reset(tmp_path / "archive")
+    assert m.why_pending(m.pending(SETTINGS)[0], SETTINGS) == "new or changed file"
+
+
+def test_scan_lists_a_deleted_video_and_forget_drops_it(tmp_path):
+    m, path = _indexed(tmp_path)
+    _fake_video(tmp_path / "archive" / "b.mp4")
+    os.remove(path)
+    assert m.scan(tmp_path / "archive")["missing"] == [path]
+    m.forget(path)
+    assert m.conn.execute("SELECT 1 FROM videos WHERE path = ?", (path,)).fetchone() is None
+    assert m.recorded_settings(path) is None
+    assert m.scan(tmp_path / "archive")["missing"] == []

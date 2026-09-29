@@ -1,6 +1,8 @@
 import csv
+from collections import Counter
 import json as jsonlib
 import os
+import time
 from importlib.resources import files as pkg_files
 from pathlib import Path
 
@@ -60,6 +62,9 @@ def help_cmd(ctx, command):
 @click.option("--asr-model", default="small", show_default=True)
 @click.option("--reindex", is_flag=True,
               help="Re-process videos even if already indexed.")
+@click.option("--estimate/--no-estimate", default=True, show_default=True,
+              help="Print an ETA first. The first run on a machine measures its "
+                   "speed once on 24 s of the first video (`mm calibrate`).")
 @click.option("--caption", default=None,
               help="Caption each segment with a Claude model (e.g. "
                    "claude-haiku-4-5) and add it to the searchable text. "
@@ -94,22 +99,29 @@ def help_cmd(ctx, command):
               help="A video at least this many seconds counts as long.")
 @click.pass_obj
 def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex,
-          caption, allow_paid, paid_budget_usd, caption_dir, caption_prompt,
+          estimate, caption, allow_paid, paid_budget_usd, caption_dir, caption_prompt,
           caption_frames,
           caption_frames_short, caption_frames_long, short_video_s,
           long_video_s):
     """Scan FOLDER recursively and index new/changed videos."""
     from .captions import MissingCaptionCredentials, get_caption_backend
     from .embeddings import get_backend
-    from .indexer import index_pending
+    from .indexer import index_pending, index_settings
 
     manifest = Manifest(data_dir / "manifest.db")
     counts = manifest.scan(folder)
     if reindex:
         manifest.reset(folder)
-    click.echo(f"scan: {counts}")
     be = get_backend(backend)
+    _forget_missing(manifest, counts, data_dir, be.name, folder)
+    click.echo(f"scan: {counts}")
+    settings = index_settings(be.name, window, stride)
+    _report_stale_elsewhere(manifest, settings, folder)
+    pending = manifest.pending(settings, folder)
+    eta = _estimate(data_dir, be, pending, window, stride,
+                    extras=asr or bool(caption)) if estimate and pending else None
     store = SegmentStore(data_dir, be.name)
+    started = time.time()
     try:
         result = index_pending(
             manifest, store, be, use_asr=asr, asr_model=asr_model,
@@ -125,10 +137,86 @@ def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex,
             caption_frames_long=caption_frames_long,
             short_video_s=short_video_s,
             long_video_s=long_video_s,
+            folder=folder,
         )
     except MissingCaptionCredentials as e:
         raise click.ClickException(str(e)) from e
-    click.echo(f"done: {result}")
+    took = f"; took {(time.time() - started) / 60:.1f} min"
+    if eta is not None:
+        took += f", estimated {eta / 60:.1f}"
+    click.echo(f"done: {result}{took if pending else ''}")
+
+
+def _estimate(data_dir, be, pending, window, stride, extras):
+    from .calibrate import calibrate, estimate, load_rate
+
+    rate = load_rate(data_dir, be.name)
+    if rate is None:
+        click.echo("calibrating: first index on this machine, measuring its "
+                   "speed once (about a minute)...")
+        rate = calibrate(data_dir, be, pending[0]["path"], log=click.echo)
+    try:
+        segments, seconds, eta = estimate(pending, rate, window, stride)
+    except Exception as e:
+        click.echo(f"estimate: unavailable ({e})")
+        return None
+    note = "; ASR and captioning come on top" if extras else ""
+    click.echo(f"estimate: {len(pending)} video(s), {seconds / 60:.1f} min of "
+               f"video, {segments} segments, ~{eta / 60:.1f} min at "
+               f"{rate['s_per_segment']} s/segment{note}")
+    return eta
+
+
+@main.command()
+@click.argument("video", type=click.Path(exists=True, dir_okay=False))
+@click.option("--backend", default="siglip", show_default=True)
+@click.pass_obj
+def calibrate(data_dir, video, backend):
+    """Measure this machine's index speed on the first seconds of VIDEO.
+
+    Pick a video from the camera you index most. `mm index` runs this by
+    itself on the first video it indexes; run it again after a hardware change.
+    """
+    from .calibrate import calibrate as run
+    from .embeddings import get_backend
+
+    run(data_dir, get_backend(backend), video, log=click.echo)
+
+
+def _forget_missing(manifest, counts, data_dir, backend_name, folder):
+    """Drop videos whose file is gone, unless every one under FOLDER is gone.
+
+    All of them missing at once is what a different mount root looks like,
+    not a deletion, and forgetting them would throw the whole index away.
+    """
+    missing = counts.pop("missing")
+    counts["removed"] = 0
+    if not missing:
+        return
+    known = counts["unchanged"] + counts["changed"] + len(missing)
+    if len(missing) == known:
+        click.echo(f"kept: all {len(missing)} indexed video(s) under {folder} are "
+                   "missing -- a different mount root? Nothing removed.")
+        return
+    stores = [SegmentStore(data_dir, backend_name), MotionStore(data_dir),
+              AxisStore(data_dir)]
+    for path in missing:
+        for store in stores:
+            store.delete_path(path)
+        manifest.forget(path)
+        click.echo(f"removed: {path} (file no longer on disk)")
+    if stores[0].count():
+        stores[0].rebuild_fts()
+    counts["removed"] = len(missing)
+
+
+def _report_stale_elsewhere(manifest, settings, folder):
+    inside = {r["path"] for r in manifest.pending(settings, folder)}
+    reasons = Counter(manifest.why_pending(r, settings)
+                      for r in manifest.pending(settings) if r["path"] not in inside)
+    for reason, n in reasons.items():
+        click.echo(f"left as is: {n} video(s) outside {folder} need re-indexing "
+                   f"({reason}); `mm index` on their folder updates them")
 
 
 def _frame_size(ctx, param, value):
@@ -382,13 +470,14 @@ def mine(data_dir, query, folder, output, k, backend, pad, asr, smart):
     from .search import search as run_search
 
     manifest = Manifest(data_dir / "manifest.db")
-    manifest.scan(folder)
     be = get_backend(backend)
+    _forget_missing(manifest, manifest.scan(folder), data_dir, be.name, folder)
     store = SegmentStore(data_dir, be.name)
-    pending = manifest.pending(index_settings(be.name))
+    pending = manifest.pending(index_settings(be.name), folder)
     if pending:
         click.echo(f"indexing {len(pending)} new/changed video(s)…")
-        index_pending(manifest, store, be, use_asr=asr, log=click.echo)
+        index_pending(manifest, store, be, use_asr=asr, folder=folder,
+                      log=click.echo)
     prefix = str(Path(folder).resolve()) + os.sep
     hits = [h for h in run_search(query, be, store, k=50)
             if h["path"].startswith(prefix)][:k]

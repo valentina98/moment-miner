@@ -51,7 +51,7 @@ RUN = docker run --rm $(GPUS) \
 # read-write. Everything else keeps :ro.
 RUN_RW = $(subst :ro,,$(RUN))
 
-.PHONY: image dev-image test index caption recaption search mine annotate eval probe serve shell
+.PHONY: image dev-image test calibrate index caption recaption search mine annotate eval probe serve shell
 
 image:
 	docker build --target runtime -t $(IMAGE) .
@@ -61,6 +61,10 @@ dev-image:
 
 test: dev-image
 	docker run --rm $(IMAGE):dev
+
+# Measures this machine once on 24 s of SUB (a video), so `index` can print an ETA; index runs it itself when missing.
+calibrate: image
+	$(RUN) $(IMAGE) calibrate /videos/$(SUB) $(ARGS)
 
 index: image
 	$(RUN) $(IMAGE) index /videos/$(SUB) $(ARGS)

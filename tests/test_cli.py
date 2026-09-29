@@ -110,3 +110,39 @@ def test_mine_default_output_is_mined_sibling(tmp_path, synthetic_video):
     runs = list(mined.iterdir())
     assert len(runs) == 1 and runs[0].name.startswith("test-pattern_")
     assert list(runs[0].glob("*.mp4"))
+
+
+def _two_indexed(tmp_path):
+    from moment_miner.manifest import Manifest
+    folder = tmp_path / "footage"
+    folder.mkdir()
+    for name in ("a.mp4", "b.mp4"):
+        (folder / name).write_bytes(b"x" * 64)
+    m = Manifest(tmp_path / "data" / "manifest.db")
+    m.scan(folder)
+    for row in m.pending():
+        m.mark_done(row["path"], 10.0, {"win": 8.0, "stride": 4.0, "frames_per_window": 8,
+                                        "frame_w": 456, "frame_h": 256, "backend": "mock"})
+    return m, folder
+
+
+def test_a_deleted_video_is_forgotten_and_the_rest_stay(tmp_path):
+    from moment_miner.cli import _forget_missing
+    m, folder = _two_indexed(tmp_path)
+    (folder / "a.mp4").unlink()
+    counts = m.scan(folder)
+    _forget_missing(m, counts, tmp_path / "data", "mock", folder)
+    assert counts["removed"] == 1
+    assert [r["path"] for r in m.conn.execute("SELECT path FROM videos")] == [
+        str((folder / "b.mp4").resolve())]
+
+
+def test_every_video_missing_looks_like_a_new_mount_and_removes_nothing(tmp_path):
+    from moment_miner.cli import _forget_missing
+    m, folder = _two_indexed(tmp_path)
+    for p in folder.iterdir():
+        p.unlink()
+    counts = m.scan(folder)
+    _forget_missing(m, counts, tmp_path / "data", "mock", folder)
+    assert counts["removed"] == 0
+    assert m.conn.execute("SELECT count(*) FROM videos").fetchone()[0] == 2

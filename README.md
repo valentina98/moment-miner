@@ -41,7 +41,8 @@ A `.llc` project names its video by a path relative to the project file, which i
 
 | Command | Purpose |
 |---|---|
-| `mm index FOLDER` | scan recursively, index new/changed videos and any whose segment geometry changed (`--reindex`, `--no-asr`, `--backend`, `--caption`) |
+| `mm index FOLDER` | scan recursively, index new/changed videos under FOLDER and any whose segment geometry changed, drop videos no longer on disk; other folders are only reported, never touched; prints an ETA first (`--reindex`, `--no-asr`, `--backend`, `--caption`, `--no-estimate`) |
+| `mm calibrate VIDEO` | measure this machine's index speed on the first 24 s of VIDEO, for the ETA; `mm index` runs it by itself the first time. On a 4K 50 fps CPU box it reads 8–15% above the full-run rate, so the ETA errs long |
 | `mm search QUERY` | ranked timestamps (`-k`, `--json`, `--llc`, `--llc-dir`, `--static`/`--moving`, `--static-max`) |
 | `mm mine QUERY FOLDER` | index-if-needed → search → top-k clips (`-o`, `-k`, `--no-smart`) |
 | `mm locate -q Q -v VIDEO` | where inside one video the action is (`--labels`/`--videos` to sweep a CSV, `--fps`, `--locator`, `--duration`, `--top`, `-o`) |
@@ -65,7 +66,8 @@ All commands take `--data-dir` (default `./mm_data`) before the subcommand.
 ```
 folder scan ─► SQLite manifest (size/mtime/partial-hash → incremental, resumable;
   records the window/stride/raster/backend each video was indexed under, so
-  changing any of them re-indexes it without --reindex)
+  changing any of them re-indexes it without --reindex; scoped to the folder
+  given, and a deleted video's rows are dropped unless the whole folder is gone)
   ├─ ffprobe metadata
   ├─ ASR: faster-whisper → word-timestamped transcript
   ├─ TIER 1: embeddings per 8s overlapping window ─► LanceDB (vector + FTS)
