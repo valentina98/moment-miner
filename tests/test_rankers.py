@@ -24,3 +24,20 @@ def test_jev_refuses_without_a_key():
     r._key = None
     with pytest.raises(RuntimeError, match="TYPESAFE_API_KEY"):
         r.score("x", ["y"])
+
+
+def test_jev_names_the_model_it_asks(monkeypatch):
+    import io
+    import json
+    import urllib.request
+    sent = {}
+
+    def fake_urlopen(req, timeout):
+        sent.update(json.loads(req.data))
+        return io.BytesIO(b'{"answers": {"q0": {"noul": 0.8}}}')
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    r = get_ranker("jev")
+    r._key = "test"
+    assert r.score("a vault", ["vault over wall"]) == [0.8]
+    assert sent["model"] == "jev-latest"
