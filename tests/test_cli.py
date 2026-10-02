@@ -99,6 +99,27 @@ def test_mine_end_to_end(tmp_path, synthetic_video):
 
 
 @requires_ffmpeg
+def test_mine_reindex_keeps_the_stored_captions(tmp_path, synthetic_video):
+    from moment_miner.manifest import Manifest
+    from moment_miner.store import AxisStore, SegmentStore
+
+    data_dir = tmp_path / "mm_data"
+    args = ["--data-dir", str(data_dir), "mine", "test pattern", str(synthetic_video.parent),
+            "-o", str(tmp_path / "clips"), "-k", "1", "--backend", "mock", "--no-asr"]
+    assert CliRunner().invoke(main, args).exit_code == 0
+    axes = {"action": "kong vault", "who": "one person", "scene": "park", "light": "sunny"}
+    AxisStore(data_dir).add([{"id": s["id"], "path": s["path"], "t0": s["t0"], "t1": s["t1"], **axes}
+                             for s in SegmentStore(data_dir, "mock").segments()])
+    Manifest(data_dir / "manifest.db").reset(synthetic_video.parent)
+
+    result = CliRunner().invoke(main, args)
+    assert result.exit_code == 0, result.output
+    assert "indexing 1 new/changed video(s)" in result.output
+    texts = {s["text"] for s in SegmentStore(data_dir, "mock").segments()}
+    assert texts == {"kong vault, one person, park, sunny"}
+
+
+@requires_ffmpeg
 def test_mine_default_output_is_mined_sibling(tmp_path, synthetic_video):
     result = CliRunner().invoke(main, [
         "--data-dir", str(tmp_path / "mm_data"),
