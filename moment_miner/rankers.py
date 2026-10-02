@@ -107,6 +107,7 @@ class JevRanker(Ranker):
 
     name = "jev"
     URL = "https://api.typesafe.ai/v1/systemone"
+    MODEL = "jev-latest"
     QUESTION = LayaRanker.QUESTION
 
     def __init__(self, api_key: str | None = None):
@@ -133,7 +134,8 @@ class JevRanker(Ranker):
         return out
 
     def _ask(self, state: str, questions: dict) -> dict:
-        body = json.dumps({"state": state, "questions": questions}).encode()
+        body = json.dumps({"state": state, "model": self.MODEL,
+                           "questions": questions}).encode()
         req = urllib.request.Request(
             self.URL, data=body,
             headers={"Authorization": f"Bearer {self._key}",
