@@ -194,8 +194,8 @@ def sample_points(span: float, stride: float) -> list[float]:
     (8 s window, 4 s stride) a full segment yields two frames, at 2 s and 6 s.
 
     **Revisit this if you change --stride.** The tiers and the half-stride step
-    were reasoned about at stride 4; at stride 2 a full 8 s window would yield
-    seven frames instead of three, and frames are the dominant cost of a
+    were reasoned about at stride 4; at stride 2 a full 8 s window yields
+    four frames instead of two, and frames are the dominant cost of a
     caption pass. Nothing here adapts to that on its own.
     """
     if span < stride:
