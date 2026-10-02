@@ -477,7 +477,8 @@ def mine(data_dir, query, folder, output, k, backend, pad, asr, smart):
     if pending:
         click.echo(f"indexing {len(pending)} new/changed video(s)…")
         index_pending(manifest, store, be, use_asr=asr, folder=folder,
-                      log=click.echo)
+                      motion_store=MotionStore(data_dir),
+                      axis_store=AxisStore(data_dir), log=click.echo)
     prefix = str(Path(folder).resolve()) + os.sep
     hits = [h for h in run_search(query, be, store, k=50)
             if h["path"].startswith(prefix)][:k]
