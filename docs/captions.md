@@ -10,15 +10,15 @@ Footage without speech leaves that column empty, so the text half of the fusion 
 
 ## Where captions live
 
-An archive is self-contained: everything derived from a folder of footage is written back into that folder, so a drive carries its own captions and can be unplugged and read elsewhere. `--caption-dir` and `-o` override that when the archive has to stay read-only.
+`<data-dir>/captions/<video id>.csv`, one file per video, never beside the footage, which the tool only reads. The video id is a fingerprint of the file's content, so a video reached through another mount or after a rename finds its captions. `--caption-dir DIR` keeps a separate caption set in `DIR/captions.csv` instead, one file for every video, which is the shape `mm probe --captions` and `mm caption-compare` read.
 
-`<folder>/captions.csv`, beside the footage — the same convention as the `labels.csv` that `mm eval` reads.
+A `captions.csv` that an older version wrote beside the footage is read once, when a video has no cache file yet, and its rows for that video are copied in. That file is never written or deleted.
 
 They are separate files on purpose. **Captions are machine-written indexed content; labels are human-checked ground truth.** Scoring captions against labels written by the same model measures agreement, not accuracy, so a caption is never also the label it is scored against.
 
-Columns: `id,t0,t1,caption,model,written`.
+Columns: `id,t0,t1,action,who,scene,light,caption,model,written`. Rows written before the axes existed carry only `caption`, and the axes are read from it.
 
-Captions are read back on the next pass. Re-indexing a folder — including `--reindex` — reuses the captions already on disk and only spends on segments that don't have one. Re-indexing without `--caption` spends nothing and keeps each segment's stored caption in its searchable text, as long as the segment geometry is unchanged. This is why they live next to the footage rather than in `mm_data`: a caption costs session quota (money only on the API-key route), and a deleted volume means a re-index, not a second caption pass.
+Captions are read back on the next pass. Re-indexing a folder — including `--reindex` — reuses the captions already on disk and only spends on segments that don't have one. Re-indexing without `--caption` spends nothing and keeps each segment's stored caption in its searchable text, as long as the segment geometry is unchanged. This is why the cache sits beside the index rather than in it: a caption costs session quota (money only on the API-key route), so re-indexing, a model change or a deleted index never touches `captions/`.
 
 ## The method
 
@@ -93,9 +93,9 @@ mm caption /videos --model claude-haiku-4-5 --frame-size 640x360
 make recaption VIDEOS=footage/src CAPTION_MODEL=claude-haiku-4-5 ARGS="--force"
 ```
 
-**Two routes.** `mm index --caption` captions while it indexes, from the frames it already decoded for the embedding, so the model never sees more than 456x256. `mm caption` is a separate pass over an index that already exists: it reads each segment's span from the store, seeks to the same instants `index --caption` would pick, decodes only those stills at `--frame-size` (default 640x360; anything wider than 640 px is downscaled before sending, `FRAME_WIDTH` in `captions.py`), then rewrites the row's `text` as transcript plus caption and rebuilds the FTS index. Vectors, schema and fusion are untouched, and the embedding model is never loaded. Use it when the caption model, prompt or raster changes and the embeddings have not, which costs no re-index. Segments that already have a sidecar caption are not bought again, but the cached caption is still written into the row; `--force` buys a fresh one. Stride and frames-per-window are read from what the manifest recorded for each video.
+**Two routes.** `mm index --caption` captions while it indexes, from the frames it already decoded for the embedding, so the model never sees more than 456x256. `mm caption` is a separate pass over an index that already exists: it reads each segment's span from the store, seeks to the same instants `index --caption` would pick, decodes only those stills at `--frame-size` (default 640x360; anything wider than 640 px is downscaled before sending, `FRAME_WIDTH` in `captions.py`), then rewrites the row's `text` as transcript plus caption and rebuilds the FTS index. Vectors, schema and fusion are untouched, and the embedding model is never loaded. Use it when the caption model, prompt or raster changes and the embeddings have not, which costs no re-index. Segments that already have a cached caption are not bought again, but the cached caption is still written into the row; `--force` buys a fresh one. Stride and frames-per-window are read from what the manifest recorded for each video.
 
-`make caption` exists because captions are written beside the footage: it mounts the archive read-write, where every other target mounts it `:ro`. Running `mm index --caption` against a read-only archive fails immediately, before the first paid request, rather than after. `--caption-dir` writes the sidecars elsewhere if the archive must stay read-only.
+`make caption` and `make recaption` mount the footage `:ro` like every other target and pass the subscription token. A caption cache that cannot be written fails before the first paid request, rather than after.
 
 ## Comparing caption sets
 

@@ -13,13 +13,15 @@ def test_annotate_from_template_and_append(tmp_path):
     (folder / "run1.mp4").write_bytes(b"x")
     (folder / "run2.mp4").write_bytes(b"x")
 
+    data = tmp_path / "data"
     result = CliRunner().invoke(main, [
-        "annotate", str(folder), "--template", "parkour",
+        "--data-dir", str(data), "annotate", str(folder), "--template", "parkour",
     ], input="kong vault over an obstacle\n2\n0:04\n0:09\n\n")
     assert result.exit_code == 0, result.output
     assert "created" in result.output and "1 label(s) appended" in result.output
+    assert sorted(p.name for p in folder.iterdir()) == ["run1.mp4", "run2.mp4"]
 
-    rows = list(csv.DictReader((folder / "labels.csv").open()))
+    rows = list(csv.DictReader((data / "labels.csv").open()))
     filled = [r for r in rows if r["video"]]
     # category comes back empty rather than holding the video name: a positional append
     # against this 5-column header would shift every field one place.
@@ -34,14 +36,15 @@ def test_annotate_appends_to_a_labels_file_without_a_category_column(tmp_path):
     folder = tmp_path / "footage"
     folder.mkdir()
     (folder / "run1.mp4").write_bytes(b"x")
-    (folder / "labels.csv").write_text("query,video,start,end\n")
+    labels = tmp_path / "labels.csv"
+    labels.write_text("query,video,start,end\n")
 
     result = CliRunner().invoke(main, [
-        "annotate", str(folder),
+        "annotate", str(folder), "--labels", str(labels),
     ], input="backflip\n1\n0:02\n0:05\n\n")
     assert result.exit_code == 0, result.output
 
-    rows = list(csv.DictReader((folder / "labels.csv").open()))
+    rows = list(csv.DictReader(labels.open()))
     assert rows == [{"query": "backflip", "video": "run1.mp4",
                      "start": "2.0", "end": "5.0"}]
 

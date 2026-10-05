@@ -55,7 +55,7 @@ A `.llc` project names its video by a path relative to the project file, which i
 | `mm status` | index statistics (`--errors` lists failed files) |
 | `mm help [COMMAND]` | this list / per-command help (also `--version`) |
 
-All commands take `--data-dir` (default `./mm_data`) before the subcommand.
+All commands take `--data-dir` (default `~/.mm_data`) before the subcommand. The data folder holds everything the tool keeps: the index, the caption cache and the labels `mm annotate` writes. It may sit on any drive, but never inside a footage folder. Deleting the index costs a re-index; deleting `captions/` costs the captions again. The footage itself is only ever read, and every `make` target mounts it `:ro`.
 
 **Static vs moving is a filter, not a search term.** Nobody types "the camera moves", so it never enters the caption text — each segment carries a motion value instead, and `mm search "..." --static` or `--moving` narrows a result set by it. The value is the fraction of pixels that change between frames, 0.0 to 1.0, which is a proxy: it reads a whip-pan and a close-up filling the frame alike. Segments with no motion value drop out of a filtered search rather than being guessed at. The measurement is in `moment_miner/motion.py`.
 
@@ -253,15 +253,15 @@ mm eval footage/labels.csv           # columns: query,video,start,end
 
 ### How to label videos
 
-Labels always live **with the footage** as `<folder>/labels.csv` — that's where `mm eval` and `make eval` look. Templates (shipped in `moment_miner/templates/`) are read-only blueprints; they get copied, never edited.
+`mm eval` takes any labels file. `mm annotate` writes to `<data-dir>/labels.csv` (`--labels` names another), never beside the footage. Templates (shipped in `moment_miner/templates/`) are read-only blueprints; they get copied, never edited.
 
 Labels are ground truth and stay hand-written. `examples/` is a different thing and holds no labels: it is for **exemplar clips**, one folder per label (`examples/kong_vault/clip1.mp4`), used to search by example rather than by text. An exemplar must never cover a moment that `labels.csv` also marks — the run would score higher for free and measure nothing.
 
-The guided way — `mm annotate` creates the file from a template and appends rows interactively (watch the video in any player, type the times here). Containerized: `make annotate VIDEOS=footage TEMPLATE=parkour` (mounts the footage writable, since the labels file lives next to it):
+The guided way — `mm annotate` creates the file from a template and appends rows interactively (watch the video in any player, type the times here). Containerized: `make annotate VIDEOS=footage TEMPLATE=parkour` mounts the footage read-only and writes to the data volume; score those with `make eval LABELS=/data/labels.csv`.
 
 ```text
 $ mm annotate footage --template parkour
-created footage/labels.csv from template 'parkour'
+created /home/me/.mm_data/labels.csv from template 'parkour'
 videos:
   [1] 2M4A2341.MP4
   [2] 2M4A2377.MP4
@@ -271,10 +271,10 @@ start (M:SS or seconds): 0:04
 end   (M:SS or seconds): 0:09
 added (1 this session)
 query (empty to finish):
-done — 1 label(s) appended to footage/labels.csv
+done — 1 label(s) appended to /home/me/.mm_data/labels.csv
 ```
 
-Or by hand: copy a template next to your footage (`cp moment_miner/templates/labels_parkour.csv footage/labels.csv`) and fill in `video,start,end` per moment in any editor:
+Or by hand: copy a template (`cp moment_miner/templates/labels_parkour.csv ~/.mm_data/labels.csv`) and fill in `video,start,end` per moment in any editor:
 
 ```csv
 query,category,video,start,end
@@ -299,7 +299,7 @@ Available templates (`moment_miner/templates/`, also listed by `mm annotate --te
 
 ### Captioning with a VLM
 
-Hand labels are ground truth for `mm eval`. Captions are the other half: `mm index --caption claude-haiku-4-5` writes one sentence per segment into the searchable text, so silent footage is findable by word and not only by pixel similarity. Captions land in `<folder>/captions.csv` beside the footage and are reused on re-index. `mm caption <folder>` does the same for an index that already exists, without re-embedding it. `mm caption-compare a.csv b.csv --videos <folder>` renders several caption sets as one blind judging page, marking where the models disagree. Method, both routes, credentials and cost per hour: [docs/captions.md](docs/captions.md).
+Hand labels are ground truth for `mm eval`. Captions are the other half: `mm index --caption claude-haiku-4-5` writes one sentence per segment into the searchable text, so silent footage is findable by word and not only by pixel similarity. Captions are cached in the data folder and reused on re-index. `mm caption <folder>` does the same for an index that already exists, without re-embedding it. `mm caption-compare a.csv b.csv --videos <folder>` renders several caption sets as one blind judging page, marking where the models disagree. Method, both routes, credentials and cost per hour: [docs/captions.md](docs/captions.md).
 
 ## Tests
 

@@ -17,12 +17,13 @@ from .timefmt import fmt_ts, parse_ts
 
 @click.group()
 @click.version_option(package_name="moment-miner", prog_name="mm")
-@click.option("--data-dir", default="mm_data", show_default=True,
-              help="Where the index lives.")
+@click.option("--data-dir", default="~/.mm_data", show_default=True,
+              help="Where everything the tool keeps lives: the index, the "
+                   "caption cache and labels. Never inside a footage folder.")
 @click.pass_context
 def main(ctx, data_dir):
     """Moment Miner: search large video archives, export lossless clips."""
-    ctx.obj = Path(data_dir)
+    ctx.obj = Path(data_dir).expanduser()
 
 
 def _ranker_names() -> list[str]:
@@ -70,8 +71,8 @@ def help_cmd(ctx, command):
                    "claude-haiku-4-5) and add it to the searchable text. "
                    "Spends session quota via Claude Code credentials; "
                    "ANTHROPIC_API_KEY spends money and needs --allow-paid "
-                   "with --paid-budget-usd. Captions are cached beside the "
-                   "footage.")
+                   "with --paid-budget-usd. Captions are cached in the data "
+                   "folder and reused on re-index.")
 @click.option("--allow-paid", is_flag=True, default=False,
               help="Permit the ANTHROPIC_API_KEY route, which spends money. "
                    "Refused without --paid-budget-usd.")
@@ -79,8 +80,8 @@ def help_cmd(ctx, command):
               help="The cap you accept for this pass, in USD. Required by "
                    "--allow-paid; a gate before the first request, not a meter.")
 @click.option("--caption-dir", default=None,
-              help="Write caption sidecars here instead of beside each video "
-                   "(use when the archive is mounted read-only).")
+              help="Keep this caption set in DIR/captions.csv instead of the "
+                   "data folder's cache, e.g. to compare two prompts.")
 @click.option("--caption-prompt", default="general", show_default=True,
               help="Caption prompt: a shipped name (see `mm caption --help`) or a file path.")
 @click.option("--caption-frames", default=None, type=int,
@@ -131,7 +132,7 @@ def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex,
             caption_backend=get_caption_backend(
                 caption, allow_paid=allow_paid, prompt=caption_prompt,
                 paid_budget_usd=paid_budget_usd) if caption else None,
-            caption_dir=caption_dir,
+            data_dir=data_dir, caption_dir=caption_dir,
             caption_frames=caption_frames,
             caption_frames_short=caption_frames_short,
             caption_frames_long=caption_frames_long,
@@ -244,7 +245,8 @@ def _frame_size(ctx, param, value):
                    "embedding's. Stills wider than 640 px are downscaled "
                    "before sending.")
 @click.option("--caption-dir", default=None,
-              help="Write caption sidecars here instead of beside each video.")
+              help="Keep this caption set in DIR/captions.csv instead of the "
+                   "data folder's cache, e.g. to compare two prompts.")
 @click.option("--caption-prompt", default="general", show_default=True,
               help="Caption prompt: a shipped name (see `mm caption --help`) or a file path.")
 @click.option("--caption-frames", default=None, type=int,
@@ -257,7 +259,7 @@ def _frame_size(ctx, param, value):
 @click.option("--short-video", "short_video_s", default=8.0, show_default=True)
 @click.option("--long-video", "long_video_s", default=120.0, show_default=True)
 @click.option("--force", is_flag=True,
-              help="Caption again even where the sidecar already has one.")
+              help="Caption again even where the cache already has one.")
 @click.pass_obj
 def caption(data_dir, folder, model, backend, frame_size, caption_dir,
             caption_prompt, caption_frames, caption_frames_short, caption_frames_long,
@@ -277,14 +279,14 @@ def caption(data_dir, folder, model, backend, frame_size, caption_dir,
             get_caption_backend(model, prompt=caption_prompt),
             folder, frame_w=frame_size[0], frame_h=frame_size[1],
             axis_store=AxisStore(data_dir),
-            caption_dir=caption_dir, caption_frames=caption_frames,
+            data_dir=data_dir, caption_dir=caption_dir, caption_frames=caption_frames,
             caption_frames_short=caption_frames_short,
             caption_frames_long=caption_frames_long,
             short_video_s=short_video_s, long_video_s=long_video_s,
             force=force, log=click.echo,
         )
     except RuntimeError as e:
-        # Missing credentials, a read-only archive, or no index yet.
+        # Missing credentials, an unwritable cache, or no index yet.
         raise click.ClickException(str(e)) from e
     click.echo(f"done: {result}")
 
@@ -513,18 +515,19 @@ def _template_names() -> list[str]:
 @click.option("--template", "template_name", default=None,
               help="Start labels.csv from a template if it doesn't exist yet.")
 @click.option("--labels", "labels_path", default=None,
-              help="Labels file [default: FOLDER/labels.csv].")
-def annotate(folder, template_name, labels_path):
+              help="Labels file [default: DATA_DIR/labels.csv].")
+@click.pass_obj
+def annotate(data_dir, folder, template_name, labels_path):
     """Interactively append ground-truth labels for videos in FOLDER.
 
-    Labels live with the footage (FOLDER/labels.csv) so `mm eval` and
-    `make eval` find them. Watch the video in any player, then enter the
-    times here.
+    Labels go to the data folder, never beside the footage, which is only
+    read. Watch the video in any player, then enter the times here.
     """
     from .manifest import VIDEO_EXTS
 
-    labels = Path(labels_path) if labels_path else Path(folder) / "labels.csv"
+    labels = Path(labels_path) if labels_path else data_dir / "labels.csv"
     if not labels.exists():
+        labels.parent.mkdir(parents=True, exist_ok=True)
         if template_name:
             src = pkg_files("moment_miner") / "templates" / f"labels_{template_name}.csv"
             if not src.is_file():
@@ -612,7 +615,7 @@ def status(data_dir, show_errors):
 @click.argument("prompts", type=click.Path(exists=True, dir_okay=False))
 @click.option("--captions", "captions_path", default=None,
               type=click.Path(exists=True, dir_okay=False),
-              help="A captions.csv written by `mm caption`. Defaults to the "
+              help="A caption set written by `mm caption`. Defaults to the "
                    "axes already in the index.")
 @click.option("--axis", default="caption", show_default=True,
               type=click.Choice(["caption", "action", "who", "scene", "light"]),

@@ -8,9 +8,10 @@ OUT      ?= clips
 DATA     ?= mm_data
 CACHE    ?= mm-hf-cache
 SUB      ?= .
-# Both are paths under VIDEOS: SUB is the folder to index, LABELS the eval set.
-# Ground truth lives beside the footage, so `eval` wants VIDEOS=footage while
-# `index` wants VIDEOS=footage/src.
+# Both are paths under VIDEOS: SUB is the folder to index, LABELS the eval set
+# (or LABELS=/data/labels.csv for the ones `make annotate` wrote).
+# The recorded eval set sits beside the footage, so `eval` wants VIDEOS=footage
+# while `index` wants VIDEOS=footage/src.
 LABELS   ?= labels.csv
 # One prompt per line. Relative to the repo, not to VIDEOS, which often points
 # at an external drive.
@@ -47,10 +48,6 @@ RUN = docker run --rm $(GPUS) \
 	-v $(CACHE):/root/.cache \
 	-v $(DATA):/data
 
-# Captions are cached beside the footage, so this one target mounts the archive
-# read-write. Everything else keeps :ro.
-RUN_RW = $(subst :ro,,$(RUN))
-
 .PHONY: image dev-image test calibrate index caption recaption search mine annotate eval probe serve shell
 
 image:
@@ -70,11 +67,11 @@ index: image
 	$(RUN) $(IMAGE) index /videos/$(SUB) $(ARGS)
 
 caption: image
-	$(TOKEN_FILE) $(RUN_RW) $(TOKEN_MOUNT) $(IMAGE) index /videos/$(SUB) --caption $(CAPTION_MODEL) --caption-prompt $(CAPTION_PROMPT) $(ARGS)
+	$(TOKEN_FILE) $(RUN) $(TOKEN_MOUNT) $(IMAGE) index /videos/$(SUB) --caption $(CAPTION_MODEL) --caption-prompt $(CAPTION_PROMPT) $(ARGS)
 
 # Captions an index that already exists, without re-embedding it.
 recaption: image
-	$(TOKEN_FILE) $(RUN_RW) $(TOKEN_MOUNT) $(IMAGE) caption /videos/$(SUB) --model $(CAPTION_MODEL) --caption-prompt $(CAPTION_PROMPT) $(ARGS)
+	$(TOKEN_FILE) $(RUN) $(TOKEN_MOUNT) $(IMAGE) caption /videos/$(SUB) --model $(CAPTION_MODEL) --caption-prompt $(CAPTION_PROMPT) $(ARGS)
 
 search: image
 	$(RUN) $(IMAGE) search "$(Q)" -k $(K) --llc-dir /data/llc
@@ -83,15 +80,12 @@ mine: image
 	mkdir -p $(OUT)
 	$(RUN) -v $(abspath $(OUT)):/out $(IMAGE) mine "$(Q)" /videos/$(SUB) -o /out -k $(K)
 
-# interactive; footage mounted writable because labels.csv lives with it
+# Interactive; labels go to DATA/labels.csv.
 annotate: image
-	docker run --rm -it \
-		-v $(abspath $(VIDEOS)):/videos \
-		-v $(CACHE):/root/.cache -v $(DATA):/data \
-		$(IMAGE) annotate /videos --template $(TEMPLATE)
+	$(RUN) -it $(IMAGE) annotate /videos --template $(TEMPLATE)
 
 eval: image
-	$(RUN) $(IMAGE) eval /videos/$(LABELS)
+	$(RUN) $(IMAGE) eval $(if $(filter /data/%,$(LABELS)),$(LABELS),/videos/$(LABELS))
 
 probe: image
 	@test -f "$(PROMPTS)" || { echo "no prompts file at $(PROMPTS) -- write one, or pass PROMPTS=<path>"; exit 1; }
