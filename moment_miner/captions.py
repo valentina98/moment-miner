@@ -23,6 +23,8 @@ from pathlib import Path
 
 import numpy as np
 
+from .guard import writable
+
 # Frames are sampled evenly across the whole window, in time order, so the
 # model can say what changes rather than describe one instant.
 #
@@ -453,6 +455,7 @@ class CaptionCache:
 
     def check_writable(self) -> None:
         """Fail before the first caption request, not after."""
+        writable(self.path)
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             probe = self.path.parent / ".write-test"
@@ -478,7 +481,7 @@ class CaptionCache:
     def flush(self) -> None:
         if not self._dirty:
             return
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        writable(self.path).parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=SIDECAR_COLUMNS)
             w.writeheader()

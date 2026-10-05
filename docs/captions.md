@@ -103,7 +103,7 @@ make recaption VIDEOS=footage/src CAPTION_MODEL=claude-haiku-4-5 ARGS="--force"
 mm caption-compare opus.csv sonnet.csv haiku.csv --videos /videos
 ```
 
-Renders one HTML page: each segment's stills, the captions under them, and a mark where the models disagree. Written to `caption-comparison.html` inside `--videos` — on the archive, with the footage it describes.
+Renders one HTML page: each segment's stills, the captions under them, and a mark where the models disagree. Written to `caption-comparison.html` in the data folder, or where `-o` names; `--videos` is only read.
 
 **Blind by default.** Which file wrote which caption is hidden and the column order is shuffled, because you necessarily know which model you launched; the blinding has to happen at judging time. The order is *balanced*, not merely random — every ordering used equally often, so each set sits in each column the same number of times. A free shuffle put one set in the middle column on 10 of 18 segments, which is exactly the position bias the shuffle exists to remove. The decode map is written beside the page as `<name>-key.csv`; leave it shut until every segment is judged. `--no-blind` labels the columns by filename instead.
 

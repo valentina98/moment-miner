@@ -71,7 +71,9 @@ def test_annotate_help_lists_templates():
 
 
 def test_annotate_unknown_template(tmp_path):
-    result = CliRunner().invoke(main, ["annotate", str(tmp_path), "--template", "nope"])
+    (tmp_path / "footage").mkdir()
+    result = CliRunner().invoke(main, ["--data-dir", str(tmp_path / "data"), "annotate",
+                                       str(tmp_path / "footage"), "--template", "nope"])
     assert result.exit_code != 0
     assert "unknown template" in result.output
 
@@ -123,15 +125,14 @@ def test_mine_reindex_keeps_the_stored_captions(tmp_path, synthetic_video):
 
 
 @requires_ffmpeg
-def test_mine_default_output_is_mined_sibling(tmp_path, synthetic_video):
+def test_mine_default_output_is_a_run_folder_under_cuts(tmp_path, synthetic_video):
     result = CliRunner().invoke(main, [
         "--data-dir", str(tmp_path / "mm_data"),
         "mine", "test pattern", str(synthetic_video.parent),
         "-k", "1", "--backend", "mock", "--no-asr",
     ])
     assert result.exit_code == 0, result.output
-    mined = synthetic_video.parent.parent / f"{synthetic_video.parent.name}_mined"
-    runs = list(mined.iterdir())
+    runs = list((tmp_path / "mm_data" / "cuts").iterdir())
     assert len(runs) == 1 and runs[0].name.startswith("test-pattern_")
     assert list(runs[0].glob("*.mp4"))
 

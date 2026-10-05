@@ -25,17 +25,16 @@ $ mm search "athlete performs a kong vault"
 /archive/parkour/video_001.mp4
   00:12:15 - 00:12:28  (score 0.0312)
 $ mm export /archive/parkour/video_001.mp4 00:12:15 00:12:28
-$ mm search "kong vault" --llc   # LosslessCut projects in llc/ next to the
-                                 # videos: open, adjust cuts, export losslessly
+$ mm search "kong vault" --llc   # LosslessCut projects in
+                                 # ~/.mm_data/cuts/kong-vault_<timestamp>/:
+                                 # open, adjust cuts, export losslessly
 $ mm mine "kong vault" /archive/parkour -k 5
                                  # one shot: index-if-needed → search → top-5
                                  # lossless clips in
-                                 # /archive/parkour_mined/kong-vault_<timestamp>/
+                                 # ~/.mm_data/cuts/kong-vault_<timestamp>/
 ```
 
-`*_mined` folders are never re-ingested by the indexer, so exports can't pollute the index.
-
-A `.llc` project names its video by a path relative to the project file, which is how LosslessCut resolves it, so a video folder and its `llc/` subfolder can be moved together.
+A `.llc` project names its video by a path relative to the project file, which is how LosslessCut resolves it, so open it where it was written.
 
 ## Commands
 
@@ -55,7 +54,25 @@ A `.llc` project names its video by a path relative to the project file, which i
 | `mm status` | index statistics (`--errors` lists failed files) |
 | `mm help [COMMAND]` | this list / per-command help (also `--version`) |
 
-All commands take `--data-dir` (default `~/.mm_data`) before the subcommand. The data folder holds everything the tool keeps: the index, the caption cache and the labels `mm annotate` writes. It may sit on any drive, but never inside a footage folder. Deleting the index costs a re-index; deleting `captions/` costs the captions again. The footage itself is only ever read, and every `make` target mounts it `:ro`.
+All commands take `--data-dir` (default `~/.mm_data`) before the subcommand.
+
+### What it writes, and where
+
+The footage is only ever read, and every `make` target mounts it `:ro`. Everything the tool writes goes to the data folder or to a place you name:
+
+| What | Where | Override |
+|---|---|---|
+| the index (`manifest.db`, `lance/`) and the measured speed (`calibration.json`) | data folder | — |
+| caption cache, one file per video | `<data>/captions/<video id>.csv` | `--caption-dir` keeps a separate set |
+| labels from `mm annotate` | `<data>/labels.csv` | `--labels` |
+| clips from `mm export` | `<data>/cuts/<video>_<t0>_<t1>.mp4` | `-o` |
+| clips from `mm mine`, `.llc` projects from `mm search --llc` | `<data>/cuts/<query>_<timestamp>/` | `-o`, `--llc-dir` |
+| the `mm caption-compare` page and its key | `<data>/caption-comparison.html` | `-o` |
+| the `mm locate` page | only with `-o` | — |
+
+The data folder may sit on any drive, but never inside a footage folder. Deleting the index costs a re-index; deleting `captions/` costs the captions again. Model weights are downloaded by their libraries into `~/.cache`, outside the tool's control.
+
+Every write passes one check, `moment_miner/guard.py`. It refuses a path inside a source folder (one named to the command, one `mm index` has scanned, or one holding an indexed video) and a path outside the data folder and the outputs named to the command. A refused write stops the command and names the path.
 
 **Static vs moving is a filter, not a search term.** Nobody types "the camera moves", so it never enters the caption text — each segment carries a motion value instead, and `mm search "..." --static` or `--moving` narrows a result set by it. The value is the fraction of pixels that change between frames, 0.0 to 1.0, which is a proxy: it reads a whip-pan and a close-up filling the frame alike. Segments with no motion value drop out of a filtered search rather than being guessed at. The measurement is in `moment_miner/motion.py`.
 

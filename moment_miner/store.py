@@ -4,6 +4,8 @@ import lancedb
 import numpy as np
 from lancedb.index import FTS
 
+from .guard import writable
+
 COLUMNS = ["id", "video_id", "path", "t0", "t1", "text"]
 AXIS_COLUMNS = ["action", "who", "scene", "light"]
 
@@ -12,7 +14,7 @@ class SegmentStore:
     """One LanceDB table per embedding backend (dimensions differ)."""
 
     def __init__(self, data_dir: str | Path, backend_name: str):
-        self.db = lancedb.connect(str(Path(data_dir) / "lance"))
+        self.db = lancedb.connect(str(writable(Path(data_dir) / "lance")))
         self.table_name = f"segments_{backend_name}"
 
     def _names(self) -> list[str]:
@@ -112,7 +114,7 @@ class AxisStore:
     TABLE = "axes"
 
     def __init__(self, data_dir: str | Path):
-        self.db = lancedb.connect(str(Path(data_dir) / "lance"))
+        self.db = lancedb.connect(str(writable(Path(data_dir) / "lance")))
 
     def _exists(self) -> bool:
         return self.TABLE in list(self.db.list_tables().tables)
@@ -171,7 +173,7 @@ class MotionStore:
     TABLE = "motion"
 
     def __init__(self, data_dir: str | Path):
-        self.db = lancedb.connect(str(Path(data_dir) / "lance"))
+        self.db = lancedb.connect(str(writable(Path(data_dir) / "lance")))
 
     def _exists(self) -> bool:
         return self.TABLE in list(self.db.list_tables().tables)

@@ -4,6 +4,8 @@ import sqlite3
 import time
 from pathlib import Path
 
+from .guard import writable
+
 VIDEO_EXTS = {
     ".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".mts", ".m2ts",
     ".wmv", ".flv", ".ts", ".3gp", ".mpg", ".mpeg",
@@ -39,6 +41,9 @@ CREATE TABLE IF NOT EXISTS index_settings (
     backend TEXT NOT NULL,
     indexed_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS folders (
+    path TEXT PRIMARY KEY
+);
 """
 
 # Every one of these feeds the segment geometry, and segment ids are
@@ -58,6 +63,25 @@ def _prefix(folder: str | Path) -> str:
     return str(Path(folder).resolve()).rstrip("/") + "/"
 
 
+def source_folders(db_path: str | Path) -> list[Path]:
+    """Every folder scanned, and every folder holding an indexed video.
+
+    Opened read-only, because the write guard asks before any manifest exists.
+    """
+    if not Path(db_path).is_file():
+        return []
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        folders = {Path(r[0]).parent for r in conn.execute("SELECT path FROM videos")}
+        try:
+            folders.update(Path(r[0]) for r in conn.execute("SELECT path FROM folders"))
+        except sqlite3.OperationalError:
+            pass  # a manifest written before folders were recorded
+    finally:
+        conn.close()
+    return sorted(folders)
+
+
 def fingerprint(path: str, chunk: int = 1 << 20) -> str:
     # Hash size + first/last MB instead of whole file: archives are TBs.
     st = os.stat(path)
@@ -72,7 +96,7 @@ def fingerprint(path: str, chunk: int = 1 << 20) -> str:
 
 class Manifest:
     def __init__(self, db_path: str | Path):
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        writable(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(db_path))
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(_SCHEMA)
@@ -84,11 +108,14 @@ class Manifest:
         caller decides whether to `forget` them.
         """
         counts = {"new": 0, "changed": 0, "unchanged": 0}
+        with self.conn:
+            self.conn.execute("INSERT OR IGNORE INTO folders (path) VALUES (?)",
+                              (str(Path(folder).resolve()),))
         seen = set()
         for p in sorted(Path(folder).resolve().rglob("*")):
             if not p.is_file() or p.suffix.lower() not in VIDEO_EXTS:
                 continue
-            # `mm mine` exports into *_mined folders; never re-ingest them.
+            # Older versions of `mm mine` exported into *_mined folders.
             if any(part.endswith("_mined") for part in p.parent.parts):
                 continue
             seen.add(str(p))
