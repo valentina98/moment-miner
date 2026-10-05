@@ -29,7 +29,8 @@ def test_run_kills_a_call_that_never_returns(monkeypatch):
 
 def test_a_stalled_stream_raises_instead_of_ending_quietly(tmp_path, monkeypatch):
     monkeypatch.setattr(ffbin, "TIMEOUT_S", 0.5)
-    monkeypatch.setattr(frames, "ffmpeg_exe", lambda: _fake(tmp_path, "ffmpeg", "false"))
+    fake = _fake(tmp_path, "ffmpeg", "false")
+    monkeypatch.setattr(frames, "ffmpeg_exe", lambda: fake)
     with pytest.raises(ffbin.FFmpegTimeout, match="no frame"):
         list(frames._stream_frames(str(tmp_path / "hang.mp4"), 1.0, 16, 16))
 
@@ -55,10 +56,10 @@ def test_a_hanging_file_is_marked_failed_and_the_run_completes(
 
     shutil.copy(synthetic_video, synthetic_video.parent / "hang.mp4")
     monkeypatch.setattr(ffbin, "TIMEOUT_S", 1.0)
-    monkeypatch.setattr(probe, "ffprobe_exe",
-                        lambda: _fake(tmp_path, "ffprobe", shutil.which("ffprobe")))
-    monkeypatch.setattr(frames, "ffmpeg_exe",
-                        lambda: _fake(tmp_path, "ffmpeg", shutil.which("ffmpeg")))
+    fake_probe = _fake(tmp_path, "ffprobe", shutil.which("ffprobe"))
+    fake_mpeg = _fake(tmp_path, "ffmpeg", shutil.which("ffmpeg"))
+    monkeypatch.setattr(probe, "ffprobe_exe", lambda: fake_probe)
+    monkeypatch.setattr(frames, "ffmpeg_exe", lambda: fake_mpeg)
     manifest = Manifest(tmp_path / "data" / "manifest.db")
     manifest.scan(synthetic_video.parent)
 
@@ -73,3 +74,24 @@ def test_a_hanging_file_is_marked_failed_and_the_run_completes(
     [failed] = manifest.errors()
     assert failed["path"].endswith("hang.mp4")
     assert "FFmpegTimeout" in failed["error"]
+
+
+def _hangs(*a, **k):
+    raise ffbin.FFmpegTimeout("ffmpeg gave no result in 300 s")
+
+
+def test_a_timeout_on_an_off_grid_span_fails_the_file(monkeypatch):
+    monkeypatch.setattr(frames, "extract_frames", _hangs)
+    # Shorter than the window, so the span is decoded on its own, not streamed.
+    with pytest.raises(ffbin.FFmpegTimeout):
+        list(frames.extract_windows("tail.mp4", [(0.0, 3.0)], n=4, win=8.0))
+
+
+def test_a_calibration_timeout_drops_the_estimate_not_the_run(monkeypatch, capsys):
+    from moment_miner import calibrate, cli
+
+    monkeypatch.setattr(calibrate, "load_rate", lambda *a: None)
+    monkeypatch.setattr(calibrate, "calibrate", _hangs)
+    backend = type("Backend", (), {"name": "mock"})()
+    assert cli._estimate("data", backend, [{"path": "hang.mp4"}], 4.0, 2.0, False) is None
+    assert "estimate: unavailable" in capsys.readouterr().out

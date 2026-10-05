@@ -151,11 +151,11 @@ def _estimate(data_dir, be, pending, window, stride, extras):
     from .calibrate import calibrate, estimate, load_rate
 
     rate = load_rate(data_dir, be.name)
-    if rate is None:
-        click.echo("calibrating: first index on this machine, measuring its "
-                   "speed once (about a minute)...")
-        rate = calibrate(data_dir, be, pending[0]["path"], log=click.echo)
     try:
+        if rate is None:
+            click.echo("calibrating: first index on this machine, measuring its "
+                       "speed once (about a minute)...")
+            rate = calibrate(data_dir, be, pending[0]["path"], log=click.echo)
         segments, seconds, eta = estimate(pending, rate, window, stride)
     except Exception as e:
         click.echo(f"estimate: unavailable ({e})")

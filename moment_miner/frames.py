@@ -154,6 +154,8 @@ def extract_windows(
     for t0, t1 in direct:
         try:
             yield t0, t1, extract_frames(path, t0, t1, n=n, w=w, h=h)
+        except ffbin.FFmpegTimeout:
+            raise
         except Exception:
             yield t0, t1, None
 
