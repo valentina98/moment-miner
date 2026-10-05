@@ -11,7 +11,7 @@ Everything runs in Docker — no local Python or ffmpeg needed (only Docker and 
 ```bash
 make test                    # build the image + run the test suite
 make index VIDEOS=footage/src  # index a folder (first run downloads models
-                             #   into the mm-hf-cache volume, ~2 GB)
+                             #   into ~/.cache/moment-miner, ~4 GB)
 make search Q="athlete performs a kong vault"
 make mine Q="kong vault" OUT=clips   # top matches as lossless clips in clips/
 make shell                   # bash inside the container, mm on PATH
@@ -154,7 +154,7 @@ docker build -t moment-miner:dev .   # dev image (adds tests + pytest)
 docker run --rm moment-miner:dev     # run the test suite
 ```
 
-Footage is mounted read-only and never copied. `DATA` and `CACHE` take a docker volume name or an absolute path, so the index and the model weights can sit on the same drive as the footage rather than on the system disk.
+Footage is mounted read-only and never copied. `make` keeps its data in `~/.mm_data` and the model weights in `~/.cache/moment-miner`, and runs the container as you, so both hold ordinary files you own. `DATA` and `CACHE` take a docker volume name or an absolute path, so the index and the model weights can sit on the same drive as the footage rather than on the system disk.
 
 Day to day, the Makefile wraps all of this: `make test`, `make index VIDEOS=/path`, `make search Q="kong vault"`, `make mine Q="..." OUT=clips`, `make annotate TEMPLATE=parkour`, `make eval`, `make probe PROMPTS=my.txt`, `make serve`, `make shell` — add `GPUS=--gpus=all` on a GPU box. API keys go in `.env`, git-ignored; copy `.env.example` and fill in what you need.
 
