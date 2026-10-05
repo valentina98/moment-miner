@@ -24,6 +24,10 @@ from .timefmt import fmt_ts, parse_ts
 def main(ctx, data_dir):
     """Moment Miner: search large video archives, export lossless clips."""
     ctx.obj = Path(data_dir).expanduser()
+    default = ctx.get_parameter_source("data_dir") == click.core.ParameterSource.DEFAULT
+    if default and Path("mm_data").is_dir():
+        click.echo(f"note: ./mm_data is not read; the data folder is {ctx.obj}. "
+                   "Pass --data-dir mm_data to use it, or move it there.", err=True)
 
 
 def _ranker_names() -> list[str]:

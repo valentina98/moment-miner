@@ -170,3 +170,14 @@ def test_every_video_missing_looks_like_a_new_mount_and_removes_nothing(tmp_path
     _forget_missing(m, counts, tmp_path / "data", "mock", folder)
     assert counts["removed"] == 0
     assert m.conn.execute("SELECT count(*) FROM videos").fetchone()[0] == 2
+
+
+def test_a_local_mm_data_left_behind_is_named(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "mm_data").mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    runner = CliRunner()
+    warned = runner.invoke(main, ["status"])
+    assert "./mm_data is not read" in warned.output
+    chosen = runner.invoke(main, ["--data-dir", "mm_data", "status"])
+    assert "./mm_data is not read" not in chosen.output
