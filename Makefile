@@ -4,9 +4,11 @@ Q        ?= kong vault
 K        ?= 10
 OUT      ?= clips
 # Both take a docker volume name or an absolute host path, so an index and the
-# model weights can live on the drive that holds the footage.
-DATA     ?= mm_data
-CACHE    ?= mm-hf-cache
+# model weights can live on the drive that holds the footage. Both are host
+# folders by default: labels, clips and .llc projects are opened from DATA, and
+# a container running as you can write to neither volume docker created as root.
+DATA     ?= $(HOME)/.mm_data
+CACHE    ?= $(HOME)/.cache/moment-miner
 SUB      ?= .
 # Both are paths under VIDEOS: SUB is the folder to index, LABELS the eval set.
 # Ground truth lives beside the footage, so `eval` wants VIDEOS=footage while
@@ -35,16 +37,21 @@ CLAUDE_CREDS ?= $(HOME)/.claude/.credentials.json
 TOKEN_FILE = tok=$$(mktemp) && trap 'rm -f "$$tok"' EXIT && trap 'exit 130' INT TERM && \
 	python3 -c 'import json, os, sys; p = sys.argv[1]; e = (json.load(open(p)) if os.path.exists(p) else {}).get("claudeAiOauth") or {}; t = e.get("accessToken"); json.dump({"claudeAiOauth": {"accessToken": t}} if isinstance(t, str) and t else {}, sys.stdout)' \
 	"$(CLAUDE_CREDS)" > "$$tok" &&
-TOKEN_MOUNT = -v "$$tok":/root/.claude/.credentials.json:ro
+TOKEN_MOUNT = -v "$$tok":/tmp/.claude/.credentials.json:ro
 
 # Keys come from .env when it exists, so a fresh checkout needs no exports;
 # docker lets an exported variable of the same name win over the file.
-RUN = docker run --rm $(GPUS) \
+# Runs as you, so what lands in DATA and OUT is yours rather than root's; that
+# user has no home in the image, hence HOME=/tmp and the cache at /cache. A host
+# folder is created first, or docker would create it owned by root.
+RUN = $(if $(filter /%,$(DATA) $(CACHE)),mkdir -p $(filter /%,$(DATA) $(CACHE)) &&,) \
+	docker run --rm $(GPUS) \
+	--user $(shell id -u):$(shell id -g) -e HOME=/tmp -e XDG_CACHE_HOME=/cache \
 	$(if $(wildcard .env),--env-file .env,) \
 	-e ANTHROPIC_API_KEY \
 	-e TYPESAFE_API_KEY \
 	-v $(abspath $(VIDEOS)):/videos:ro \
-	-v $(CACHE):/root/.cache \
+	-v $(CACHE):/cache \
 	-v $(DATA):/data
 
 # Captions are cached beside the footage, so this one target mounts the archive
