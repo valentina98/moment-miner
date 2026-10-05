@@ -109,27 +109,43 @@ def smart_cut(
     return out, start, end
 
 
+def on_host(path: str | Path) -> str:
+    """`path` as the host sees it, from MM_HOST_PATHS (`/videos=/host/dir;...`).
+
+    LosslessCut runs on the host, so a project written in a container must
+    name its video relative to where both files sit there.
+    """
+    path = os.path.abspath(path)
+    for pair in filter(None, os.environ.get("MM_HOST_PATHS", "").split(";")):
+        inside, _, outside = pair.partition("=")
+        if Path(path).is_relative_to(inside):
+            return os.path.join(outside, os.path.relpath(path, inside))
+    return path
+
+
 def write_llc_projects(hits: list[dict], out_dir: str | Path, label: str = "") -> list[str]:
     """One LosslessCut project (.llc, JSON) per video, hits as cut segments.
 
     LosslessCut resolves media as path.join(dirname(project), mediaFileName)
     with no sanitization, so mediaFileName is the relative path from out_dir
-    to the video — open the files in place, do not move them.
+    to the video — open the files in place, do not move them. Inside a
+    container it is computed between the host paths, see `on_host`.
     """
     target_dir = writable(out_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
-    by_video: dict[str, list[dict]] = defaultdict(list)
-    for h in hits:
-        by_video[h["path"]].append(h)
+    # A hit is the search's guess, so its name says so: "kong vault? #2".
+    by_video: dict[str, list[tuple[int, dict]]] = defaultdict(list)
+    for rank, h in enumerate(hits, 1):
+        by_video[h["path"]].append((rank, h))
     written: list[str] = []
     for path, video_hits in by_video.items():
         video = Path(path)
         project = {
             "version": 1,
-            "mediaFileName": os.path.relpath(path, target_dir),
+            "mediaFileName": os.path.relpath(on_host(path), on_host(target_dir)),
             "cutSegments": [
-                {"start": h["t0"], "end": h["t1"], "name": label}
-                for h in sorted(video_hits, key=lambda h: h["t0"])
+                {"start": h["t0"], "end": h["t1"], "name": f"{label}? #{rank}"}
+                for rank, h in sorted(video_hits, key=lambda rh: rh[1]["t0"])
             ],
         }
         out = target_dir / f"{video.stem}.llc"

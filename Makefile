@@ -19,6 +19,11 @@ PROMPTS  ?= prompts.txt
 AXIS     ?= action
 RANKER   ?= mock
 ARGS     ?=
+# LLC=1: `search` also writes LosslessCut projects, into DATA/cuts/<query>_<time>/.
+LLC      ?=
+# Lets those projects name their video by its host path; only a DATA that is a
+# host folder can be opened from the host at all.
+HOST_PATHS = $(if $(filter /%,$(DATA)),-e MM_HOST_PATHS="/videos=$(abspath $(VIDEOS));/data=$(DATA)",)
 TEMPLATE ?= parkour
 PORT     ?= 7700
 CAPTION_MODEL ?= claude-haiku-4-5
@@ -44,6 +49,7 @@ RUN = docker run --rm $(GPUS) \
 	$(if $(wildcard .env),--env-file .env,) \
 	-e ANTHROPIC_API_KEY \
 	-e TYPESAFE_API_KEY \
+	$(HOST_PATHS) \
 	-v $(abspath $(VIDEOS)):/videos:ro \
 	-v $(CACHE):/root/.cache \
 	-v $(DATA):/data
@@ -74,7 +80,7 @@ recaption: image
 	$(TOKEN_FILE) $(RUN) $(TOKEN_MOUNT) $(IMAGE) caption /videos/$(SUB) --model $(CAPTION_MODEL) --caption-prompt $(CAPTION_PROMPT) $(ARGS)
 
 search: image
-	$(RUN) $(IMAGE) search "$(Q)" -k $(K) --llc-dir /data/llc
+	$(RUN) $(IMAGE) search "$(Q)" -k $(K) $(if $(LLC),--llc,)
 
 mine: image
 	mkdir -p $(OUT)

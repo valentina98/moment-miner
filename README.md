@@ -66,7 +66,7 @@ The footage is only ever read, and every `make` target mounts it `:ro`. Everythi
 | caption cache, one file per video | `<data>/captions/<video id>.csv` | `--caption-dir` keeps a separate set |
 | labels from `mm annotate` | `<data>/labels.csv` | `--labels` |
 | clips from `mm export` | `<data>/cuts/<video>_<t0>_<t1>.mp4` | `-o` |
-| clips from `mm mine`, `.llc` projects from `mm search --llc` | `<data>/cuts/<query>_<timestamp>/` | `-o`, `--llc-dir` |
+| clips from `mm mine`, `.llc` projects from `mm search --llc` (`make search LLC=1`) | `<data>/cuts/<query>_<timestamp>/` | `-o`, `--llc-dir` |
 | the `mm caption-compare` page and its key | `<data>/caption-comparison.html` | `-o` |
 | the `mm locate` page | only with `-o` | — |
 
