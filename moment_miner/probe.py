@@ -1,11 +1,11 @@
 import json
-import subprocess
 
+from . import ffbin
 from .ffbin import ffprobe_exe
 
 
 def probe(path: str) -> dict:
-    out = subprocess.run(
+    out = ffbin.run(
         [ffprobe_exe(), "-v", "error", "-print_format", "json",
          "-show_format", "-show_streams", path],
         capture_output=True, text=True, check=True,
@@ -50,7 +50,7 @@ def _keyframe_pts(path: str, start: float, end: float) -> list[float]:
     Reads packet flags (no decoding); frame-level pts_time is empty on
     some ffprobe builds.
     """
-    out = subprocess.run(
+    out = ffbin.run(
         [ffprobe_exe(), "-v", "error", "-select_streams", "v:0",
          "-show_entries", "packet=pts_time,flags", "-of", "csv=p=0",
          "-read_intervals", f"{start}%{end}", path],

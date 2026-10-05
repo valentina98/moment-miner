@@ -1,9 +1,9 @@
 import json
 import os
-import subprocess
 from collections import defaultdict
 from pathlib import Path
 
+from . import ffbin
 from .ffbin import ffmpeg_exe
 from .probe import keyframe_before, probe
 
@@ -41,7 +41,7 @@ def export_clip(
     # video+audio only if copying everything fails.
     errors = []
     for mapping in (["-map", "0", "-ignore_unknown"], ["-map", "0:v", "-map", "0:a?"]):
-        result = subprocess.run(
+        result = ffbin.run(
             [ffmpeg_exe(), "-y", "-v", "error", "-ss", f"{start:.3f}", "-i", path,
              "-t", f"{end - start:.3f}", *mapping, "-c", "copy",
              "-avoid_negative_ts", "make_zero", out],
