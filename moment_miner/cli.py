@@ -308,7 +308,7 @@ def caption(data_dir, folder, model, backend, frame_size, caption_dir,
 @click.option("--segments", "segments_file", default=None,
               type=click.Path(exists=True, dir_okay=False),
               help="seg,video,t0,t1 CSV, needed when the caption files carry "
-                   "only seg,caption instead of the sidecar columns.")
+                   "only seg,caption instead of the caption-cache columns.")
 @click.option("--frames-dir", default=None, type=click.Path(exists=True, file_okay=False),
               help="Use stills already extracted here, named <seg id>_*.jpg, "
                    "instead of decoding the videos.")
