@@ -5,6 +5,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from .ffbin import ffmpeg_exe
+from .guard import writable
 from .probe import keyframe_before, probe
 
 
@@ -29,6 +30,7 @@ def export_clip(
     may begin up to one GOP early. Use it when the extra footage does not
     matter and speed does, or where the smartcut extra is unavailable.
     """
+    writable(out)
     if smart:
         return smart_cut(path, t0, t1, out, pad=pad)
     duration = probe(path)["duration"]
@@ -107,39 +109,45 @@ def smart_cut(
     return out, start, end
 
 
-def write_llc_projects(
-    hits: list[dict], out_dir: str | Path | None = None, label: str = ""
-) -> list[str]:
+def on_host(path: str | Path) -> str:
+    """`path` as the host sees it, from MM_HOST_PATHS (`/videos=/host/dir;...`).
+
+    LosslessCut runs on the host, so a project written in a container must
+    name its video relative to where both files sit there.
+    """
+    path = os.path.abspath(path)
+    for pair in filter(None, os.environ.get("MM_HOST_PATHS", "").split(";")):
+        inside, _, outside = pair.partition("=")
+        if Path(path).is_relative_to(inside):
+            return os.path.join(outside, os.path.relpath(path, inside))
+    return path
+
+
+def write_llc_projects(hits: list[dict], out_dir: str | Path, label: str = "") -> list[str]:
     """One LosslessCut project (.llc, JSON) per video, hits as cut segments.
 
     LosslessCut resolves media as path.join(dirname(project), mediaFileName)
-    with no sanitization, so relative mediaFileName paths work. Default:
-    projects go in an `llc/` subfolder next to each video (mediaFileName
-    "../<video>"), keeping the video folders uncluttered. With out_dir,
-    mediaFileName is the relative path from out_dir to the video — open the
-    files in place, do not move them.
+    with no sanitization, so mediaFileName is the relative path from out_dir
+    to the video — open the files in place, do not move them. Inside a
+    container it is computed between the host paths, see `on_host`.
     """
-    by_video: dict[str, list[dict]] = defaultdict(list)
-    for h in hits:
-        by_video[h["path"]].append(h)
+    target_dir = writable(out_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    # A hit is the search's guess, so its name says so: "kong vault? #2".
+    by_video: dict[str, list[tuple[int, dict]]] = defaultdict(list)
+    for rank, h in enumerate(hits, 1):
+        by_video[h["path"]].append((rank, h))
     written: list[str] = []
     for path, video_hits in by_video.items():
         video = Path(path)
-        if out_dir is None:
-            target_dir = video.parent / "llc"
-            media_ref = f"../{video.name}"
-        else:
-            target_dir = Path(out_dir)
-            media_ref = os.path.relpath(path, target_dir)
         project = {
             "version": 1,
-            "mediaFileName": media_ref,
+            "mediaFileName": os.path.relpath(on_host(path), on_host(target_dir)),
             "cutSegments": [
-                {"start": h["t0"], "end": h["t1"], "name": label}
-                for h in sorted(video_hits, key=lambda h: h["t0"])
+                {"start": h["t0"], "end": h["t1"], "name": f"{label}? #{rank}"}
+                for rank, h in sorted(video_hits, key=lambda rh: rh[1]["t0"])
             ],
         }
-        target_dir.mkdir(parents=True, exist_ok=True)
         out = target_dir / f"{video.stem}.llc"
         n = 1
         while str(out) in written:

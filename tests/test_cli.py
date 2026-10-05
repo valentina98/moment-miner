@@ -13,13 +13,15 @@ def test_annotate_from_template_and_append(tmp_path):
     (folder / "run1.mp4").write_bytes(b"x")
     (folder / "run2.mp4").write_bytes(b"x")
 
+    data = tmp_path / "data"
     result = CliRunner().invoke(main, [
-        "annotate", str(folder), "--template", "parkour",
+        "--data-dir", str(data), "annotate", str(folder), "--template", "parkour",
     ], input="kong vault over an obstacle\n2\n0:04\n0:09\n\n")
     assert result.exit_code == 0, result.output
     assert "created" in result.output and "1 label(s) appended" in result.output
+    assert sorted(p.name for p in folder.iterdir()) == ["run1.mp4", "run2.mp4"]
 
-    rows = list(csv.DictReader((folder / "labels.csv").open()))
+    rows = list(csv.DictReader((data / "labels.csv").open()))
     filled = [r for r in rows if r["video"]]
     # category comes back empty rather than holding the video name: a positional append
     # against this 5-column header would shift every field one place.
@@ -34,14 +36,15 @@ def test_annotate_appends_to_a_labels_file_without_a_category_column(tmp_path):
     folder = tmp_path / "footage"
     folder.mkdir()
     (folder / "run1.mp4").write_bytes(b"x")
-    (folder / "labels.csv").write_text("query,video,start,end\n")
+    labels = tmp_path / "labels.csv"
+    labels.write_text("query,video,start,end\n")
 
     result = CliRunner().invoke(main, [
-        "annotate", str(folder),
+        "annotate", str(folder), "--labels", str(labels),
     ], input="backflip\n1\n0:02\n0:05\n\n")
     assert result.exit_code == 0, result.output
 
-    rows = list(csv.DictReader((folder / "labels.csv").open()))
+    rows = list(csv.DictReader(labels.open()))
     assert rows == [{"query": "backflip", "video": "run1.mp4",
                      "start": "2.0", "end": "5.0"}]
 
@@ -68,7 +71,9 @@ def test_annotate_help_lists_templates():
 
 
 def test_annotate_unknown_template(tmp_path):
-    result = CliRunner().invoke(main, ["annotate", str(tmp_path), "--template", "nope"])
+    (tmp_path / "footage").mkdir()
+    result = CliRunner().invoke(main, ["--data-dir", str(tmp_path / "data"), "annotate",
+                                       str(tmp_path / "footage"), "--template", "nope"])
     assert result.exit_code != 0
     assert "unknown template" in result.output
 
@@ -120,15 +125,14 @@ def test_mine_reindex_keeps_the_stored_captions(tmp_path, synthetic_video):
 
 
 @requires_ffmpeg
-def test_mine_default_output_is_mined_sibling(tmp_path, synthetic_video):
+def test_mine_default_output_is_a_run_folder_under_cuts(tmp_path, synthetic_video):
     result = CliRunner().invoke(main, [
         "--data-dir", str(tmp_path / "mm_data"),
         "mine", "test pattern", str(synthetic_video.parent),
         "-k", "1", "--backend", "mock", "--no-asr",
     ])
     assert result.exit_code == 0, result.output
-    mined = synthetic_video.parent.parent / f"{synthetic_video.parent.name}_mined"
-    runs = list(mined.iterdir())
+    runs = list((tmp_path / "mm_data" / "cuts").iterdir())
     assert len(runs) == 1 and runs[0].name.startswith("test-pattern_")
     assert list(runs[0].glob("*.mp4"))
 
@@ -167,3 +171,14 @@ def test_every_video_missing_looks_like_a_new_mount_and_removes_nothing(tmp_path
     _forget_missing(m, counts, tmp_path / "data", "mock", folder)
     assert counts["removed"] == 0
     assert m.conn.execute("SELECT count(*) FROM videos").fetchone()[0] == 2
+
+
+def test_a_local_mm_data_left_behind_is_named(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "mm_data").mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    runner = CliRunner()
+    warned = runner.invoke(main, ["status"])
+    assert "./mm_data is not read" in warned.output
+    chosen = runner.invoke(main, ["--data-dir", "mm_data", "status"])
+    assert "./mm_data is not read" not in chosen.output
