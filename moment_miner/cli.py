@@ -8,6 +8,7 @@ from pathlib import Path
 
 import click
 
+from . import guard
 from .locate import LOCATORS
 from .manifest import Manifest
 from .motion import STATIC_MAX
@@ -19,11 +20,14 @@ from .timefmt import fmt_ts, parse_ts
 @click.version_option(package_name="moment-miner", prog_name="mm")
 @click.option("--data-dir", default="~/.mm_data", show_default=True,
               help="Where everything the tool keeps lives: the index, the "
-                   "caption cache and labels. Never inside a footage folder.")
+                   "caption cache, labels and exported clips (cuts/). Never "
+                   "inside a footage folder.")
 @click.pass_context
 def main(ctx, data_dir):
     """Moment Miner: search large video archives, export lossless clips."""
     ctx.obj = Path(data_dir).expanduser()
+    guard.arm(ctx.obj)
+    ctx.call_on_close(guard.disarm)
     default = ctx.get_parameter_source("data_dir") == click.core.ParameterSource.DEFAULT
     if default and Path("mm_data").is_dir():
         click.echo(f"note: ./mm_data is not read; the data folder is {ctx.obj}. "
@@ -113,6 +117,9 @@ def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex,
     from .embeddings import get_backend
     from .indexer import index_pending, index_settings
 
+    guard.source(folder)
+    if caption_dir:
+        guard.output(caption_dir)
     manifest = Manifest(data_dir / "manifest.db")
     counts = manifest.scan(folder)
     if reindex:
@@ -185,6 +192,7 @@ def calibrate(data_dir, video, backend):
     from .calibrate import calibrate as run
     from .embeddings import get_backend
 
+    guard.source(video)
     run(data_dir, get_backend(backend), video, log=click.echo)
 
 
@@ -276,6 +284,9 @@ def caption(data_dir, folder, model, backend, frame_size, caption_dir,
     from .captions import get_caption_backend
     from .indexer import caption_indexed
 
+    guard.source(folder)
+    if caption_dir:
+        guard.output(caption_dir)
     store = SegmentStore(data_dir, backend)
     try:
         result = caption_indexed(
@@ -299,9 +310,8 @@ def caption(data_dir, folder, model, backend, frame_size, caption_dir,
 @click.argument("caption_files", nargs=-1, required=True,
                 type=click.Path(exists=True, dir_okay=False))
 @click.option("-o", "--out", default=None, type=click.Path(dir_okay=False),
-              help="Where to write the page. Defaults to "
-                   "caption-comparison.html inside --videos, so everything "
-                   "about an archive stays on the archive.")
+              help="Where to write the page [default: "
+                   "caption-comparison.html in the data folder].")
 @click.option("--videos", default=None, type=click.Path(exists=True, file_okay=False),
               help="Folder holding the videos, so the page can show each "
                    "segment's stills. Omit for a text-only page.")
@@ -316,7 +326,9 @@ def caption(data_dir, folder, model, backend, frame_size, caption_dir,
               help="Hide which file wrote which caption and shuffle their "
                    "order, so a comparison can be judged without knowing.")
 @click.option("--seed", default=0, show_default=True, help="Shuffle seed.")
-def caption_compare(caption_files, out, videos, segments_file, frames_dir, blind, seed):
+@click.pass_obj
+def caption_compare(data_dir, caption_files, out, videos, segments_file, frames_dir,
+                    blind, seed):
     """Render CAPTION_FILES side by side as one HTML page.
 
     Marks where the models disagree, and by default hides which file is which
@@ -324,14 +336,18 @@ def caption_compare(caption_files, out, videos, segments_file, frames_dir, blind
     """
     from .compare import build
 
+    if videos:
+        guard.source(videos)
+    if out:
+        guard.output(Path(out).parent)
     html, order_map = build(
         [Path(f) for f in caption_files], videos=Path(videos) if videos else None,
         segments_file=Path(segments_file) if segments_file else None,
         frames_dir=Path(frames_dir) if frames_dir else None,
         blind=blind, seed=seed,
     )
-    out_path = Path(out) if out else (
-        Path(videos) if videos else Path(".")) / "caption-comparison.html"
+    out_path = Path(out) if out else data_dir / "caption-comparison.html"
+    guard.writable(out_path).parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(html)
     click.echo(f"wrote {out_path} ({out_path.stat().st_size / 1e6:.1f} MB)")
     if blind:
@@ -349,8 +365,8 @@ def caption_compare(caption_files, out, videos, segments_file, frames_dir, blind
 @click.option("--backend", default="siglip", show_default=True)
 @click.option("--json", "as_json", is_flag=True)
 @click.option("--llc", is_flag=True,
-              help="Write LosslessCut projects (.llc) into an llc/ subfolder "
-                   "next to each matched video.")
+              help="Write LosslessCut projects (.llc) into "
+                   "DATA_DIR/cuts/<query>_<time>/.")
 @click.option("--llc-dir", default=None,
               help="Write .llc files here instead; media is referenced "
                    "relatively, so open them in place (don't move them).")
@@ -377,7 +393,10 @@ def search(data_dir, query, k, backend, as_json, llc, llc_dir, static,
     if (llc or llc_dir) and hits:
         from .export import write_llc_projects
 
-        for f in write_llc_projects(hits, llc_dir, label=query):
+        if llc_dir:
+            guard.output(llc_dir)
+        for f in write_llc_projects(hits, llc_dir or _cut_dir(data_dir, query),
+                                    label=query):
             click.echo(f"llc: {f}")
     if as_json:
         click.echo(jsonlib.dumps(
@@ -398,7 +417,8 @@ def search(data_dir, query, k, backend, as_json, llc, llc_dir, static,
 @click.argument("video")
 @click.argument("t0")
 @click.argument("t1")
-@click.option("-o", "--output", default=None, help="Output file path.")
+@click.option("-o", "--output", default=None,
+              help="Output file path [default: DATA_DIR/cuts/<video>_<t0>_<t1>.mp4].")
 @click.option("--pad", default=1.0, show_default=True)
 @click.option("--snap/--no-snap", default=True, show_default=True,
               help="Snap start to previous keyframe (fully lossless).")
@@ -415,10 +435,16 @@ def export(data_dir, video, t0, t1, output, pad, snap, smart):
     path = row["path"] if row else video
     if not Path(path).is_file():
         raise click.BadParameter(f"video not found: {video}")
+    guard.source(path)
     start, end = parse_ts(t0), parse_ts(t1)
     if output is None:
         stem = Path(path).stem
-        output = f"{stem}_{fmt_ts(start).replace(':', '-')}_{fmt_ts(end).replace(':', '-')}.mp4"
+        cuts = data_dir / "cuts"
+        guard.writable(cuts).mkdir(parents=True, exist_ok=True)
+        output = str(cuts / f"{stem}_{fmt_ts(start).replace(':', '-')}_"
+                            f"{fmt_ts(end).replace(':', '-')}.mp4")
+    else:
+        guard.output(Path(output).parent)
     out, a0, a1 = export_clip(path, start, end, output, pad=pad, snap=snap, smart=smart)
     click.echo(f"wrote {out} ({fmt_ts(a0)} - {fmt_ts(a1)} of source)")
 
@@ -444,14 +470,14 @@ def eval(data_dir, labels, k, backend):
     )
 
 
-def _default_mine_out(folder: str, query: str) -> Path:
+def _cut_dir(data_dir: Path, query: str) -> Path:
+    """`<data-dir>/cuts/<query>_<time>/`, one folder per run."""
     import re
     from datetime import datetime
 
-    src = Path(folder).resolve()
     slug = re.sub(r"[^a-z0-9]+", "-", query.lower()).strip("-")[:40] or "query"
     stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    return src.parent / f"{src.name}_mined" / f"{slug}_{stamp}"
+    return data_dir / "cuts" / f"{slug}_{stamp}"
 
 
 @main.command()
@@ -459,7 +485,7 @@ def _default_mine_out(folder: str, query: str) -> Path:
 @click.argument("folder", type=click.Path(exists=True, file_okay=False))
 @click.option("-o", "--output", default=None,
               help="Folder for the exported clips "
-                   "[default: <FOLDER>_mined/<query>_<timestamp>/ next to FOLDER].")
+                   "[default: DATA_DIR/cuts/<query>_<timestamp>/].")
 @click.option("-k", default=5, show_default=True, help="Export top-k matches.")
 @click.option("--backend", default="siglip", show_default=True)
 @click.option("--pad", default=1.0, show_default=True)
@@ -475,6 +501,10 @@ def mine(data_dir, query, folder, output, k, backend, pad, asr, smart):
     from .indexer import index_pending, index_settings
     from .search import search as run_search
 
+    guard.source(folder)
+    if output:
+        guard.output(output)
+        guard.writable(output)
     manifest = Manifest(data_dir / "manifest.db")
     be = get_backend(backend)
     _forget_missing(manifest, manifest.scan(folder), data_dir, be.name, folder)
@@ -491,8 +521,8 @@ def mine(data_dir, query, folder, output, k, backend, pad, asr, smart):
     if not hits:
         click.echo("no results")
         return
-    output = Path(output) if output else _default_mine_out(folder, query)
-    output.mkdir(parents=True, exist_ok=True)
+    output = Path(output) if output else _cut_dir(data_dir, query)
+    guard.writable(output).mkdir(parents=True, exist_ok=True)
     for i, h in enumerate(hits, 1):
         name = f"{i:02d}_{Path(h['path']).stem}_{fmt_ts(h['t0']).replace(':', '-')}.mp4"
         out, _, _ = export_clip(h["path"], h["t0"], h["t1"],
@@ -529,7 +559,10 @@ def annotate(data_dir, folder, template_name, labels_path):
     """
     from .manifest import VIDEO_EXTS
 
-    labels = Path(labels_path) if labels_path else data_dir / "labels.csv"
+    guard.source(folder)
+    if labels_path:
+        guard.output(Path(labels_path).parent)
+    labels = guard.writable(Path(labels_path) if labels_path else data_dir / "labels.csv")
     if not labels.exists():
         labels.parent.mkdir(parents=True, exist_ok=True)
         if template_name:
@@ -727,6 +760,10 @@ def locate(query, video, labels, videos, fps, locator_name, duration, top_k, bac
     else:
         raise click.UsageError("give --query and --video, or --labels and --videos")
 
+    guard.source(*(p for p in (video, videos) if p))
+    if out:
+        guard.output(Path(out).parent)
+        guard.writable(out)
     be = get_backend(backend)
     loc = build_locator(locator_name, duration=duration, top_k=top_k)
     root = Path(videos) if videos else None

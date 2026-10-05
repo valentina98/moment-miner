@@ -4,7 +4,7 @@ import os
 from moment_miner.export import write_llc_projects
 
 
-def test_write_llc_default_subfolder(tmp_path):
+def test_write_llc_one_project_per_video_hits_in_time_order(tmp_path):
     video = tmp_path / "clips" / "a.mp4"
     video.parent.mkdir()
     video.write_bytes(b"x")
@@ -12,17 +12,13 @@ def test_write_llc_default_subfolder(tmp_path):
         {"path": str(video), "t0": 12.0, "t1": 20.0},
         {"path": str(video), "t0": 4.0, "t1": 8.0},
     ]
-    written = write_llc_projects(hits, label="kong vault")
-    assert written == [str(tmp_path / "clips" / "llc" / "a.llc")]
+    written = write_llc_projects(hits, tmp_path / "cuts", label="kong vault")
+    assert written == [str(tmp_path / "cuts" / "a.llc")]
 
-    a = json.loads((tmp_path / "clips" / "llc" / "a.llc").read_text())
+    a = json.loads((tmp_path / "cuts" / "a.llc").read_text())
     assert a["version"] == 1
-    assert a["mediaFileName"] == "../a.mp4"
     assert [s["start"] for s in a["cutSegments"]] == [4.0, 12.0]
     assert a["cutSegments"][0]["name"] == "kong vault"
-    # LosslessCut resolves media relative to the .llc location
-    resolved = (tmp_path / "clips" / "llc" / a["mediaFileName"]).resolve()
-    assert resolved == video.resolve()
 
 
 def test_write_llc_custom_dir_relative_media(tmp_path):

@@ -5,6 +5,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from .ffbin import ffmpeg_exe
+from .guard import writable
 from .probe import keyframe_before, probe
 
 
@@ -29,6 +30,7 @@ def export_clip(
     may begin up to one GOP early. Use it when the extra footage does not
     matter and speed does, or where the smartcut extra is unavailable.
     """
+    writable(out)
     if smart:
         return smart_cut(path, t0, t1, out, pad=pad)
     duration = probe(path)["duration"]
@@ -107,39 +109,29 @@ def smart_cut(
     return out, start, end
 
 
-def write_llc_projects(
-    hits: list[dict], out_dir: str | Path | None = None, label: str = ""
-) -> list[str]:
+def write_llc_projects(hits: list[dict], out_dir: str | Path, label: str = "") -> list[str]:
     """One LosslessCut project (.llc, JSON) per video, hits as cut segments.
 
     LosslessCut resolves media as path.join(dirname(project), mediaFileName)
-    with no sanitization, so relative mediaFileName paths work. Default:
-    projects go in an `llc/` subfolder next to each video (mediaFileName
-    "../<video>"), keeping the video folders uncluttered. With out_dir,
-    mediaFileName is the relative path from out_dir to the video — open the
-    files in place, do not move them.
+    with no sanitization, so mediaFileName is the relative path from out_dir
+    to the video — open the files in place, do not move them.
     """
+    target_dir = writable(out_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
     by_video: dict[str, list[dict]] = defaultdict(list)
     for h in hits:
         by_video[h["path"]].append(h)
     written: list[str] = []
     for path, video_hits in by_video.items():
         video = Path(path)
-        if out_dir is None:
-            target_dir = video.parent / "llc"
-            media_ref = f"../{video.name}"
-        else:
-            target_dir = Path(out_dir)
-            media_ref = os.path.relpath(path, target_dir)
         project = {
             "version": 1,
-            "mediaFileName": media_ref,
+            "mediaFileName": os.path.relpath(path, target_dir),
             "cutSegments": [
                 {"start": h["t0"], "end": h["t1"], "name": label}
                 for h in sorted(video_hits, key=lambda h: h["t0"])
             ],
         }
-        target_dir.mkdir(parents=True, exist_ok=True)
         out = target_dir / f"{video.stem}.llc"
         n = 1
         while str(out) in written:

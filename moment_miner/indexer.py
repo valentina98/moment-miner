@@ -16,6 +16,7 @@ from .captions import (
 )
 from .embeddings.base import EmbeddingBackend
 from .frames import FRAME_H, FRAME_W, extract_stills, extract_windows
+from .guard import WriteRefused
 from .manifest import Manifest
 from .motion import moving_fraction
 from .probe import probe
@@ -216,6 +217,8 @@ def index_pending(
             counts["segments"] += len(rows)
             note = f" ({unreadable} unreadable skipped)" if unreadable else ""
             log(f"    {len(rows)} segments in {time.time() - t_start:.1f}s{note}")
+        except WriteRefused:
+            raise
         except Exception as e:
             manifest.mark_error(path, f"{type(e).__name__}: {e}")
             counts["errors"] += 1
