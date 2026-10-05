@@ -1,7 +1,10 @@
 import subprocess
+import threading
+import time
 
 import numpy as np
 
+from . import ffbin
 from .ffbin import ffmpeg_exe
 
 # Keep the short side at or above the embedding processor's input: SigLIP2-256
@@ -17,7 +20,7 @@ def extract_frames(
 ) -> np.ndarray:
     """Uniformly sample up to n RGB frames from [t0, t1] → (k, h, w, 3) uint8."""
     dur = max(t1 - t0, 0.1)
-    proc = subprocess.run(
+    proc = ffbin.run(
         [ffmpeg_exe(), "-v", "error", "-ss", f"{t0:.3f}", "-t", f"{dur:.3f}",
          "-i", path, "-vf", f"fps={n / dur:.6f},scale={w}:{h}",
          "-frames:v", str(n), "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
@@ -39,7 +42,7 @@ def extract_stills(path: str, times, w: int, h: int) -> np.ndarray:
     size = w * h * 3
     out = []
     for t in times:
-        proc = subprocess.run(
+        proc = ffbin.run(
             [ffmpeg_exe(), "-v", "error", "-ss", f"{t:.3f}", "-i", path,
              "-vf", f"scale={w}:{h}", "-frames:v", "1",
              "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
@@ -51,21 +54,46 @@ def extract_stills(path: str, times, w: int, h: int) -> np.ndarray:
 
 
 def _stream_frames(path: str, fps: float, w: int, h: int):
-    """Yield (h, w, 3) frames from one sequential decode of the whole file."""
+    """Yield (h, w, 3) frames from one sequential decode of the whole file.
+
+    A whole-file decode has no fixed length, so it is held to ffbin.TIMEOUT_S
+    per frame instead. Only time spent waiting on ffmpeg counts: the caller
+    embedding a window between frames is not a stall.
+    """
     proc = subprocess.Popen(
         [ffmpeg_exe(), "-v", "error", "-i", path,
          "-vf", f"fps={fps:.6f},scale={w}:{h}",
          "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
     )
+    timeout = ffbin.TIMEOUT_S
+    waiting_since = [None]
+    stalled = threading.Event()
+    done = threading.Event()
+
+    def watch():
+        while not done.wait(min(1.0, timeout / 10)):
+            t = waiting_since[0]
+            if t is not None and time.monotonic() - t > timeout:
+                stalled.set()
+                proc.kill()
+                return
+
+    threading.Thread(target=watch, daemon=True).start()
     size = w * h * 3
     try:
         while True:
+            waiting_since[0] = time.monotonic()
             buf = proc.stdout.read(size)
+            waiting_since[0] = None
+            if stalled.is_set():
+                raise ffbin.FFmpegTimeout(
+                    f"ffmpeg produced no frame in {timeout:.0f} s")
             if len(buf) < size:
                 return
             yield np.frombuffer(buf, np.uint8).reshape(h, w, 3)
     finally:
+        done.set()
         proc.stdout.close()
         proc.terminate()
         proc.wait()

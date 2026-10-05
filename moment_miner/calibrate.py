@@ -13,11 +13,11 @@ fresh measurement there.
 import json
 import os
 import platform
-import subprocess
 import tempfile
 import time
 from pathlib import Path
 
+from . import ffbin
 from .ffbin import ffmpeg_exe
 from .indexer import index_pending, windows
 from .manifest import Manifest
@@ -68,7 +68,7 @@ def calibrate(data_dir, backend, video, log=print, seconds: float = SAMPLE_S) ->
         folder = Path(tmp) / "sample"
         folder.mkdir()
         sample = folder / f"sample{Path(video).suffix}"
-        subprocess.run(
+        ffbin.run(
             [ffmpeg_exe(), "-v", "error", "-y", "-t", f"{seconds}", "-i", str(video),
              "-map", "0:v:0", "-c", "copy", str(sample)],
             check=True, capture_output=True,
