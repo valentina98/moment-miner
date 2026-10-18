@@ -101,11 +101,18 @@ def calibrate(data_dir, backend, video, log=print, seconds: float = SAMPLE_S) ->
     return entry
 
 
-def estimate(rows, rate: dict, win: float, stride: float) -> tuple[int, float, float]:
-    """(segments, video seconds, estimated seconds) for the videos in `rows`."""
-    segments, seconds = 0, 0.0
+def estimate(rows, rate: dict, win: float,
+             stride: float) -> tuple[int, float, float, dict[str, str]]:
+    """(segments, video seconds, estimated seconds, {path: error}) for the
+    videos in `rows`. A file that cannot be probed is left out of the sums and
+    returned with its error."""
+    segments, seconds, failed = 0, 0.0, {}
     for row in rows:
-        duration = probe(row["path"])["duration"]
+        try:
+            duration = probe(row["path"])["duration"]
+        except Exception as e:
+            failed[row["path"]] = f"{type(e).__name__}: {e}"
+            continue
         seconds += duration
         segments += len(list(windows(duration, win, stride)))
-    return segments, seconds, segments * rate["s_per_segment"]
+    return segments, seconds, segments * rate["s_per_segment"], failed

@@ -118,8 +118,8 @@ def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex,
     settings = index_settings(be.name, window, stride)
     _report_stale_elsewhere(manifest, settings, folder)
     pending = manifest.pending(settings, folder)
-    eta = _estimate(data_dir, be, pending, window, stride,
-                    extras=asr or bool(caption)) if estimate and pending else None
+    eta = _estimate(data_dir, be, pending, window, stride, asr or bool(caption),
+                    manifest) if estimate and pending else None
     store = SegmentStore(data_dir, be.name)
     started = time.time()
     try:
@@ -147,7 +147,9 @@ def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex,
     click.echo(f"done: {result}{took if pending else ''}")
 
 
-def _estimate(data_dir, be, pending, window, stride, extras):
+def _estimate(data_dir, be, pending, window, stride, extras, manifest):
+    """The ETA line. A file whose probe fails here is marked failed at once, so
+    the index pass does not wait on the same hung probe a second time."""
     from .calibrate import calibrate, estimate, load_rate
 
     rate = load_rate(data_dir, be.name)
@@ -156,12 +158,15 @@ def _estimate(data_dir, be, pending, window, stride, extras):
             click.echo("calibrating: first index on this machine, measuring its "
                        "speed once (about a minute)...")
             rate = calibrate(data_dir, be, pending[0]["path"], log=click.echo)
-        segments, seconds, eta = estimate(pending, rate, window, stride)
+        segments, seconds, eta, failed = estimate(pending, rate, window, stride)
     except Exception as e:
         click.echo(f"estimate: unavailable ({e})")
         return None
+    for path, error in failed.items():
+        manifest.mark_error(path, error)
+        click.echo(f"estimate: {path} could not be probed, marked failed ({error})")
     note = "; ASR and captioning come on top" if extras else ""
-    click.echo(f"estimate: {len(pending)} video(s), {seconds / 60:.1f} min of "
+    click.echo(f"estimate: {len(pending) - len(failed)} video(s), {seconds / 60:.1f} min of "
                f"video, {segments} segments, ~{eta / 60:.1f} min at "
                f"{rate['s_per_segment']} s/segment{note}")
     return eta

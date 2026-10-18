@@ -93,7 +93,8 @@ def test_a_calibration_timeout_drops_the_estimate_not_the_run(monkeypatch, capsy
     monkeypatch.setattr(calibrate, "load_rate", lambda *a: None)
     monkeypatch.setattr(calibrate, "calibrate", _hangs)
     backend = type("Backend", (), {"name": "mock"})()
-    assert cli._estimate("data", backend, [{"path": "hang.mp4"}], 4.0, 2.0, False) is None
+    assert cli._estimate("data", backend, [{"path": "hang.mp4"}], 4.0, 2.0, False,
+                         None) is None
     assert "estimate: unavailable" in capsys.readouterr().out
 
 
@@ -130,3 +131,29 @@ def test_a_killed_stream_copy_leaves_no_partial_clip(tmp_path, synthetic_video, 
         export.export_clip(str(synthetic_video), 1.0, 3.0, str(out), smart=False)
     assert not out.exists()
 
+
+def test_a_file_the_estimate_cannot_probe_is_marked_failed_once(tmp_path, monkeypatch, capsys):
+    from moment_miner import calibrate, cli
+    from moment_miner.manifest import Manifest
+
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    for name in ("ok.mp4", "hang.mp4"):
+        (archive / name).write_bytes(name.encode() * 1000)
+    manifest = Manifest(tmp_path / "data" / "manifest.db")
+    manifest.scan(archive)
+
+    def probe(path):
+        if path.endswith("hang.mp4"):
+            raise ffbin.FFmpegTimeout("ffprobe gave no result in 300 s")
+        return {"duration": 8.0}
+
+    monkeypatch.setattr(calibrate, "load_rate", lambda *a: {"s_per_segment": 1.0})
+    monkeypatch.setattr(calibrate, "probe", probe)
+    backend = type("Backend", (), {"name": "mock"})()
+    assert cli._estimate("data", backend, manifest.pending(), 4.0, 2.0, False,
+                         manifest) is not None
+    assert "could not be probed, marked failed" in capsys.readouterr().out
+    [failed] = manifest.errors()
+    assert failed["path"].endswith("hang.mp4") and "FFmpegTimeout" in failed["error"]
+    assert [r["path"] for r in manifest.pending()] == [str(archive / "ok.mp4")]
