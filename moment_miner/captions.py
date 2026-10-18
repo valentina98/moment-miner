@@ -425,16 +425,17 @@ class CaptionSidecar:
         if self.path.exists():
             with self.path.open(newline="") as f:
                 self.rows = {r["id"]: r for r in csv.DictReader(f)}
+        for row in self.rows.values():
+            # Rows written before the axes existed carry only the joined caption.
+            if not row.get("action"):
+                row.update(parse_axes(row["caption"]))
         self._dirty = False
 
     def get(self, seg_id: str) -> dict[str, str] | None:
         row = self.rows.get(seg_id)
         if not row:
             return None
-        if row.get("action"):
-            return {a: row[a] for a in AXES}
-        # Rows written before the axes existed carry only the joined caption.
-        return parse_axes(row["caption"])
+        return {a: row[a] for a in AXES}
 
     def put(self, seg_id: str, t0: float, t1: float, axes: dict[str, str],
             model: str) -> None:

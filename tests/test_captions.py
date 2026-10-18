@@ -257,6 +257,15 @@ def test_sidecar_is_read_back_so_captions_are_not_bought_twice(tmp_path):
     assert CaptionSidecar(video).get("a:4.0") is None
 
 
+def test_rows_written_before_the_axes_existed_still_vote(tmp_path):
+    (tmp_path / "captions.csv").write_text(
+        "id,t0,t1,caption,model,written\n"
+        "a:0.0,0.0,8.0,man vaulting a ledge in a park,m,2026-09-18\n")
+    sc = CaptionSidecar(tmp_path / "a.mp4")
+    sc.vote()
+    assert sc.get("a:0.0")["action"] == "man vaulting a ledge in a park"
+
+
 def test_caption_dir_override(tmp_path):
     video = tmp_path / "a.mp4"
     out = tmp_path / "elsewhere"
