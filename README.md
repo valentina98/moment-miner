@@ -46,7 +46,7 @@ A `.llc` project names its video by a path relative to the project file, which i
 | `mm mine QUERY FOLDER` | index-if-needed → search → top-k clips (`-o`, `-k`, `--no-smart`) |
 | `mm locate -q Q -v VIDEO` | where inside one video the action is (`--labels`/`--videos` to sweep a CSV, `--fps`, `--locator`, `--duration`, `--top`, `-o`) |
 | `mm annotate FOLDER` | interactive ground-truth labeling (`--template`) |
-| `mm eval LABELS.csv` | recall@k + MRR against hand labels |
+| `mm eval [LABELS.csv]` | recall@k + MRR against hand labels (default `<data-dir>/labels.csv`) |
 | `mm caption FOLDER` | caption already-indexed segments without re-embedding (`--model`, `--frame-size`, `--caption-frames`, `--force`) |
 | `mm caption-compare A.csv B.csv` | several caption sets as one blind judging page |
 | `mm export VIDEO T0 T1` | one clip (`--pad`, `--no-smart`, `--no-snap`) |
@@ -265,16 +265,19 @@ curl localhost:7700/health    # backend, device, segment count
 `mm eval` scores the index against hand-labeled ground truth (recall@k + MRR):
 
 ```bash
-mm eval footage/labels.csv           # columns: query,video,start,end
+mm eval                              # <data-dir>/labels.csv; columns: query,video,start,end
+mm eval other-labels.csv             # any other file
 ```
+
+It prints which labels file it scored before the scores.
 
 ### How to label videos
 
-`mm eval` takes any labels file. `mm annotate` writes to `<data-dir>/labels.csv` (`--labels` names another), never beside the footage. Templates (shipped in `moment_miner/templates/`) are read-only blueprints; they get copied, never edited.
+`mm annotate` writes to `<data-dir>/labels.csv` (`--labels` names another), the file `mm eval` scores by default. Templates (shipped in `moment_miner/templates/`) are read-only blueprints; they get copied, never edited.
 
 Labels are ground truth and stay hand-written. `examples/` is a different thing and holds no labels: it is for **exemplar clips**, one folder per label (`examples/kong_vault/clip1.mp4`), used to search by example rather than by text. An exemplar must never cover a moment that `labels.csv` also marks — the run would score higher for free and measure nothing.
 
-The guided way — `mm annotate` creates the file from a template and appends rows interactively (watch the video in any player, type the times here). Containerized: `make annotate VIDEOS=footage TEMPLATE=parkour` mounts the footage read-only and writes to the data volume; score those with `make eval LABELS=/data/labels.csv`.
+The guided way — `mm annotate` creates the file from a template and appends rows interactively (watch the video in any player, type the times here). Containerized: `make annotate VIDEOS=footage TEMPLATE=parkour` mounts the footage read-only and writes to the data folder, and `make eval` scores that file. Neither gets API keys: they call no hosted model.
 
 ```text
 $ mm annotate footage --template parkour

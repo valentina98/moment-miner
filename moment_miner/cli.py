@@ -445,15 +445,21 @@ def export(data_dir, video, t0, t1, output, pad, snap, smart):
 
 
 @main.command()
-@click.argument("labels", type=click.Path(exists=True, dir_okay=False))
+@click.argument("labels", required=False, type=click.Path(dir_okay=False))
 @click.option("-k", default=10, show_default=True)
 @click.option("--backend", default="siglip", show_default=True)
 @click.pass_obj
 def eval(data_dir, labels, k, backend):
-    """Score search quality against a labels CSV (query,video,start,end)."""
+    """Score search quality against a labels CSV (query,video,start,end)
+    [default: DATA_DIR/labels.csv, where `mm annotate` writes]."""
     from .embeddings import get_backend
     from .evaluate import evaluate, load_labels
+    from .hostpaths import on_host
 
+    labels = Path(labels) if labels else data_dir / "labels.csv"
+    if not labels.is_file():
+        raise click.ClickException(f"no labels file at {on_host(labels)}")
+    click.echo(f"labels: {on_host(labels)}")
     be = get_backend(backend)
     store = SegmentStore(data_dir, be.name)
     report = evaluate(load_labels(labels), be, store, k=k)

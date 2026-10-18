@@ -183,3 +183,21 @@ def test_a_local_mm_data_left_behind_is_named(tmp_path, monkeypatch):
     assert "./mm_data is not read" in warned.output
     chosen = runner.invoke(main, ["--data-dir", "mm_data", "status"])
     assert "./mm_data is not read" not in chosen.output
+
+
+@requires_ffmpeg
+def test_eval_scores_the_labels_in_the_data_folder_and_names_the_file(tmp_path, synthetic_video):
+    data_dir = tmp_path / "mm_data"
+
+    def run(*args):
+        return CliRunner().invoke(main, ["--data-dir", str(data_dir), *args])
+
+    assert run("eval", "--backend", "mock").exit_code != 0
+    assert run("index", str(synthetic_video.parent), "--backend", "mock", "--no-asr",
+               "--no-estimate").exit_code == 0
+    (data_dir / "labels.csv").write_text(
+        f"query,video,start,end\ntest pattern,{synthetic_video.name},0,4\n")
+    result = run("eval", "--backend", "mock")
+    assert result.exit_code == 0, result.output
+    assert f"labels: {data_dir / 'labels.csv'}" in result.output
+    assert "(1 labels)" in result.output

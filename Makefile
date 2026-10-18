@@ -8,11 +8,9 @@ OUT      ?= clips
 DATA     ?= mm_data
 CACHE    ?= mm-hf-cache
 SUB      ?= .
-# Both are paths under VIDEOS: SUB is the folder to index, LABELS the eval set
-# (or LABELS=/data/labels.csv for the ones `make annotate` wrote).
-# The recorded eval set sits beside the footage, so `eval` wants VIDEOS=footage
-# while `index` wants VIDEOS=footage/src.
-LABELS   ?= labels.csv
+# SUB is the folder under VIDEOS to index. `eval` scores DATA/labels.csv, where
+# `make annotate` writes; LABELS names another file under VIDEOS, or /data/...
+LABELS   ?=
 # One prompt per line. Relative to the repo, not to VIDEOS, which often points
 # at an external drive.
 PROMPTS  ?= prompts.txt
@@ -44,16 +42,18 @@ TOKEN_FILE = tok=$$(mktemp) && trap 'rm -f "$$tok"' EXIT && trap 'exit 130' INT 
 	"$(CLAUDE_CREDS)" > "$$tok" &&
 TOKEN_MOUNT = -v "$$tok":/root/.claude/.credentials.json:ro
 
-# Keys come from .env when it exists, so a fresh checkout needs no exports;
-# docker lets an exported variable of the same name win over the file.
-RUN = docker run --rm $(GPUS) \
-	$(if $(wildcard .env),--env-file .env,) \
-	-e ANTHROPIC_API_KEY \
-	-e TYPESAFE_API_KEY \
+# For targets that call no hosted model, so they never hold a key.
+RUN_NO_KEYS = docker run --rm $(GPUS) \
 	$(HOST_PATHS) \
 	-v $(abspath $(VIDEOS)):/videos:ro \
 	-v $(CACHE):/root/.cache \
 	-v $(DATA):/data
+# Keys come from .env when it exists, so a fresh checkout needs no exports;
+# docker lets an exported variable of the same name win over the file.
+RUN = $(RUN_NO_KEYS) \
+	$(if $(wildcard .env),--env-file .env,) \
+	-e ANTHROPIC_API_KEY \
+	-e TYPESAFE_API_KEY
 
 .PHONY: image dev-image test calibrate index caption recaption search mine annotate eval probe serve shell
 
@@ -89,10 +89,10 @@ mine: image
 
 # Interactive; labels go to DATA/labels.csv.
 annotate: image
-	$(RUN) -it $(IMAGE) annotate /videos --template $(TEMPLATE)
+	$(RUN_NO_KEYS) -it $(IMAGE) annotate /videos --template $(TEMPLATE)
 
 eval: image
-	$(RUN) $(IMAGE) eval $(if $(filter /data/%,$(LABELS)),$(LABELS),/videos/$(LABELS))
+	$(RUN_NO_KEYS) $(IMAGE) eval $(if $(LABELS),$(if $(filter /data/%,$(LABELS)),$(LABELS),/videos/$(LABELS)),)
 
 probe: image
 	@test -f "$(PROMPTS)" || { echo "no prompts file at $(PROMPTS) -- write one, or pass PROMPTS=<path>"; exit 1; }
