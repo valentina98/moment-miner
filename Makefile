@@ -21,9 +21,10 @@ RANKER   ?= mock
 ARGS     ?=
 # LLC=1: `search` also writes LosslessCut projects, into DATA/cuts/<query>_<time>/.
 LLC      ?=
-# Lets those projects name their video by its host path; only a DATA that is a
-# host folder can be opened from the host at all.
-HOST_PATHS = $(if $(filter /%,$(DATA)),-e MM_HOST_PATHS="/videos=$(abspath $(VIDEOS));/data=$(DATA)",)
+# Host paths let those projects name their video from the host, and let the tool
+# see that an OUT inside VIDEOS is the same place, so it never indexes its own
+# clips. Only a DATA that is a host folder has a host path.
+HOST_PATHS = -e MM_HOST_PATHS="/videos=$(abspath $(VIDEOS));/out=$(abspath $(OUT))$(if $(filter /%,$(DATA)),;/data=$(DATA),)"
 TEMPLATE ?= parkour
 PORT     ?= 7700
 CAPTION_MODEL ?= claude-haiku-4-5

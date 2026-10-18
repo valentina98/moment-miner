@@ -58,21 +58,21 @@ All commands take `--data-dir` (default `~/.mm_data`) before the subcommand.
 
 ### What it writes, and where
 
-The footage is only ever read, and every `make` target mounts it `:ro`. Everything the tool writes goes to the data folder or to a place you name:
+The tool never changes or replaces a footage file, and every `make` target mounts the footage `:ro`. Everything it writes goes to the data folder or to a folder you name, which may be a footage folder, its subfolder or a sibling:
 
 | What | Where | Override |
 |---|---|---|
 | the index (`manifest.db`, `lance/`) and the measured speed (`calibration.json`) | data folder | — |
 | caption cache, one file per video | `<data>/captions/<video id>.csv` | `--caption-dir` keeps a separate set |
 | labels from `mm annotate` | `<data>/labels.csv` | `--labels` |
-| clips from `mm export` | `<data>/cuts/<video>_<t0>_<t1>.mp4` | `-o` |
-| clips from `mm mine`, `.llc` projects from `mm search --llc` (`make search LLC=1`) | `<data>/cuts/<query>_<timestamp>/` | `-o`, `--llc-dir` |
+| clips from `mm export` | `<data>/cuts/<video>-<from>-<to><ext>` | `-o` (a file, or a folder to name it in) |
+| clips from `mm mine` (`<rank>_<video>-<from>-<to><ext>`), `.llc` projects from `mm search --llc` (`make search LLC=1`) | `<data>/cuts/<query>_<timestamp>/` | `-o`, `OUT=`, `--llc-dir` |
 | the `mm caption-compare` page and its key | `<data>/caption-comparison.html` | `-o` |
 | the `mm locate` page | only with `-o` | — |
 
-The data folder may sit on any drive, but never inside a footage folder. Deleting the index costs a re-index; deleting `captions/` costs the captions again. Model weights are downloaded by their libraries into `~/.cache`, outside the tool's control.
+Clip names follow LosslessCut's default, `<video>-<from>-<to><ext>` with the exact cut times (`2M4A8050-00.01.12.345-00.01.20.678.MP4`). An existing file is never replaced: a clip or `.llc` whose name is taken is skipped, and the run ends listing what it skipped, with exit code 1. `mm index` never indexes a clip the tool exported, wherever it sits. The data folder may sit on any drive, footage folders included. Deleting the index costs a re-index; deleting `captions/` costs the captions again. Model weights are downloaded by their libraries into `~/.cache`, outside the tool's control.
 
-Every write passes one check, `moment_miner/guard.py`. It refuses a path inside a source folder (one named to the command, one `mm index` has scanned, or one holding an indexed video) and a path outside the data folder and the outputs named to the command. A refused write stops the command and names the path.
+Every write passes one check, `moment_miner/guard.py`. It refuses to replace an existing video, and a path outside the data folder and the outputs named to the command. A refused write stops the command and names the path.
 
 **Static vs moving is a filter, not a search term.** Nobody types "the camera moves", so it never enters the caption text — each segment carries a motion value instead, and `mm search "..." --static` or `--moving` narrows a result set by it. The value is the fraction of pixels that change between frames, 0.0 to 1.0, which is a proxy: it reads a whip-pan and a close-up filling the frame alike. Segments with no motion value drop out of a filtered search rather than being guessed at. The measurement is in `moment_miner/motion.py`.
 

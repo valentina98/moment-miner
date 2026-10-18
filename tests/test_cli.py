@@ -97,7 +97,7 @@ def test_mine_end_to_end(tmp_path, synthetic_video):
     result = CliRunner().invoke(main, [
         "--data-dir", str(data_dir),
         "mine", "test pattern", str(synthetic_video.parent),
-        "-o", str(out_dir), "-k", "1", "--backend", "mock", "--no-asr",
+        "-o", str(tmp_path / "clips2"), "-k", "1", "--backend", "mock", "--no-asr",
     ])
     assert result.exit_code == 0, result.output
     assert "indexing" not in result.output
@@ -117,6 +117,7 @@ def test_mine_reindex_keeps_the_stored_captions(tmp_path, synthetic_video):
                              for s in SegmentStore(data_dir, "mock").segments()])
     Manifest(data_dir / "manifest.db").reset(synthetic_video.parent)
 
+    args[args.index(str(tmp_path / "clips"))] = str(tmp_path / "clips2")
     result = CliRunner().invoke(main, args)
     assert result.exit_code == 0, result.output
     assert "indexing 1 new/changed video(s)" in result.output

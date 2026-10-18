@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 
 from .guard import writable
+from .hostpaths import on_host
 
 VIDEO_EXTS = {
     ".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".mts", ".m2ts",
@@ -41,7 +42,7 @@ CREATE TABLE IF NOT EXISTS index_settings (
     backend TEXT NOT NULL,
     indexed_at REAL NOT NULL
 );
-CREATE TABLE IF NOT EXISTS folders (
+CREATE TABLE IF NOT EXISTS exports (
     path TEXT PRIMARY KEY
 );
 """
@@ -63,25 +64,6 @@ def _prefix(folder: str | Path) -> str:
     return str(Path(folder).resolve()).rstrip("/") + "/"
 
 
-def source_folders(db_path: str | Path) -> list[Path]:
-    """Every folder scanned, and every folder holding an indexed video.
-
-    Opened read-only, because the write guard asks before any manifest exists.
-    """
-    if not Path(db_path).is_file():
-        return []
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    try:
-        folders = {Path(r[0]).parent for r in conn.execute("SELECT path FROM videos")}
-        try:
-            folders.update(Path(r[0]) for r in conn.execute("SELECT path FROM folders"))
-        except sqlite3.OperationalError:
-            pass  # a manifest written before folders were recorded
-    finally:
-        conn.close()
-    return sorted(folders)
-
-
 def fingerprint(path: str, chunk: int = 1 << 20) -> str:
     # Hash size + first/last MB instead of whole file: archives are TBs.
     st = os.stat(path)
@@ -101,6 +83,12 @@ class Manifest:
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(_SCHEMA)
 
+    def add_export(self, path: str | Path) -> None:
+        """A clip the tool wrote: `scan` never indexes it, wherever it sits."""
+        with self.conn:
+            self.conn.execute("INSERT OR IGNORE INTO exports (path) VALUES (?)",
+                              (on_host(Path(path).resolve()),))
+
     def scan(self, folder: str | Path) -> dict:
         """Register new/changed videos under folder. Returns counts.
 
@@ -108,12 +96,12 @@ class Manifest:
         caller decides whether to `forget` them.
         """
         counts = {"new": 0, "changed": 0, "unchanged": 0}
-        with self.conn:
-            self.conn.execute("INSERT OR IGNORE INTO folders (path) VALUES (?)",
-                              (str(Path(folder).resolve()),))
+        exported = {r[0] for r in self.conn.execute("SELECT path FROM exports")}
         seen = set()
         for p in sorted(Path(folder).resolve().rglob("*")):
             if not p.is_file() or p.suffix.lower() not in VIDEO_EXTS:
+                continue
+            if on_host(p) in exported:
                 continue
             # Older versions of `mm mine` exported into *_mined folders.
             if any(part.endswith("_mined") for part in p.parent.parts):

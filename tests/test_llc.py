@@ -12,7 +12,7 @@ def test_write_llc_one_project_per_video_hits_in_time_order(tmp_path):
         {"path": str(video), "t0": 12.0, "t1": 20.0},
         {"path": str(video), "t0": 4.0, "t1": 8.0},
     ]
-    written = write_llc_projects(hits, tmp_path / "cuts", label="kong vault")
+    written, _ = write_llc_projects(hits, tmp_path / "cuts", label="kong vault")
     assert written == [str(tmp_path / "cuts" / "a.llc")]
 
     a = json.loads((tmp_path / "cuts" / "a.llc").read_text())
@@ -26,7 +26,7 @@ def test_write_llc_custom_dir_relative_media(tmp_path):
     video.parent.mkdir(parents=True)
     video.write_bytes(b"x")
     out_dir = tmp_path / "results"
-    written = write_llc_projects([{"path": str(video), "t0": 1.0, "t1": 3.0}], out_dir)
+    written, _ = write_llc_projects([{"path": str(video), "t0": 1.0, "t1": 3.0}], out_dir)
     b = json.loads((out_dir / "b.llc").read_text())
     assert b["mediaFileName"] == os.path.join("..", "archive", "sub", "b.mov")
     assert (out_dir / b["mediaFileName"]).resolve() == video.resolve()
@@ -38,7 +38,7 @@ def test_write_llc_dir_stem_collision(tmp_path):
         {"path": "/x/a.mp4", "t0": 1.0, "t1": 2.0},
         {"path": "/y/a.mp4", "t0": 3.0, "t1": 4.0},
     ]
-    written = write_llc_projects(hits, tmp_path, label="q")
+    written, _ = write_llc_projects(hits, tmp_path, label="q")
     assert len(set(written)) == 2
 
 
@@ -53,3 +53,11 @@ def test_write_llc_in_a_container_names_the_video_by_host_paths(tmp_path, monkey
     a = json.loads((out_dir / "a.llc").read_text())
     on_host = os.path.normpath(os.path.join("/home/me/.mm_data/cuts/run", a["mediaFileName"]))
     assert on_host == "/proj/footage/src/a.mp4"
+
+
+def test_write_llc_never_replaces_an_existing_project(tmp_path):
+    hits = [{"path": "/x/a.mp4", "t0": 1.0, "t1": 2.0}]
+    (tmp_path / "a.llc").write_text("mine")
+    written, taken = write_llc_projects(hits, tmp_path, label="q")
+    assert (written, taken) == ([], [str(tmp_path / "a.llc")])
+    assert (tmp_path / "a.llc").read_text() == "mine"
