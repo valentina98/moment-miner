@@ -95,3 +95,38 @@ def test_a_calibration_timeout_drops_the_estimate_not_the_run(monkeypatch, capsy
     backend = type("Backend", (), {"name": "mock"})()
     assert cli._estimate("data", backend, [{"path": "hang.mp4"}], 4.0, 2.0, False) is None
     assert "estimate: unavailable" in capsys.readouterr().out
+
+
+def test_a_call_still_writing_is_not_killed(tmp_path, monkeypatch):
+    monkeypatch.setattr(ffbin, "TIMEOUT_S", 0.5)
+    out = tmp_path / "out.bin"
+    result = ffbin.run_while_growing(
+        ["sh", "-c", f"for i in 1 2 3 4 5 6 7 8 9 10; do echo x >> {out}; sleep 0.2; done"],
+        out, text=True)
+    assert result.returncode == 0
+    assert out.read_text().count("x") == 10
+
+
+def test_a_call_that_stops_writing_is_killed(tmp_path, monkeypatch):
+    monkeypatch.setattr(ffbin, "TIMEOUT_S", 0.5)
+    out = tmp_path / "out.bin"
+    t = time.monotonic()
+    with pytest.raises(ffbin.FFmpegTimeout, match="wrote nothing"):
+        ffbin.run_while_growing(["sh", "-c", f"echo x > {out}; exec sleep 60"], out)
+    assert time.monotonic() - t < 5
+
+
+@requires_ffmpeg
+def test_a_killed_stream_copy_leaves_no_partial_clip(tmp_path, synthetic_video, monkeypatch):
+    from moment_miner import export
+
+    fake = tmp_path / "ffmpeg"
+    fake.write_text('#!/bin/sh\nfor a; do last=$a; done\nprintf partial > "$last"\nexec sleep 60\n')
+    fake.chmod(0o755)
+    monkeypatch.setattr(ffbin, "TIMEOUT_S", 0.5)
+    monkeypatch.setattr(export, "ffmpeg_exe", lambda: str(fake))
+    out = tmp_path / "clip.mp4"
+    with pytest.raises(ffbin.FFmpegTimeout):
+        export.export_clip(str(synthetic_video), 1.0, 3.0, str(out), smart=False)
+    assert not out.exists()
+
