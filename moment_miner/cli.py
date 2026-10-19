@@ -28,10 +28,6 @@ def main(ctx, data_dir):
     ctx.obj = Path(data_dir).expanduser()
     guard.arm(ctx.obj)
     ctx.call_on_close(guard.disarm)
-    default = ctx.get_parameter_source("data_dir") == click.core.ParameterSource.DEFAULT
-    if default and Path("mm_data").is_dir():
-        click.echo(f"note: ./mm_data is not read; the data folder is {ctx.obj}. "
-                   "Pass --data-dir mm_data to use it, or move it there.", err=True)
 
 
 def _ranker_names() -> list[str]:

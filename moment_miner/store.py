@@ -29,15 +29,6 @@ class SegmentStore:
             )
         return self.db.open_table(self.table_name)
 
-    def _select(self, extra: str) -> list[str]:
-        """Only the columns this table actually has.
-
-        Selecting a column a table does not have is an error, and an index
-        built by an older version should keep searching either way.
-        """
-        have = set(self.table.schema.names)
-        return [c for c in COLUMNS if c in have] + [extra]
-
     def add(self, rows: list[dict]):
         if not rows:
             return
@@ -77,14 +68,14 @@ class SegmentStore:
     def vector_search(self, vec: np.ndarray, k: int = 50) -> list[dict]:
         return (
             self.table.search(np.asarray(vec, dtype=np.float32))
-            .limit(k).select(self._select("_distance")).to_list()
+            .limit(k).select([*COLUMNS, "_distance"]).to_list()
         )
 
     def text_search(self, query: str, k: int = 50) -> list[dict]:
         try:
             return (
                 self.table.search(query, query_type="fts")
-                .limit(k).select(self._select("_score")).to_list()
+                .limit(k).select([*COLUMNS, "_score"]).to_list()
             )
         except Exception:
             # No FTS index yet, or query contains no indexable terms.

@@ -235,9 +235,7 @@ def test_backend_selection():
 # --- the caption cache in the data folder ----------------------------------
 
 def test_cache_lives_in_the_data_folder_keyed_by_video_id(tmp_path):
-    video = tmp_path / "clips" / "a.mp4"
-    video.parent.mkdir()
-    sc = open_captions(tmp_path / "data", video, "a")
+    sc = open_captions(tmp_path / "data", "a")
     sc.put("a:0.0", 0.0, 8.0, parse_axes("a caption"), "claude-haiku-4-5")
     sc.flush()
     written = tmp_path / "data" / "captions" / "a.csv"
@@ -246,49 +244,19 @@ def test_cache_lives_in_the_data_folder_keyed_by_video_id(tmp_path):
     assert rows[0]["action"] == "a caption"
     assert rows[0]["caption"] == "a caption, unclear, unclear, unclear"
     assert rows[0]["model"] == "claude-haiku-4-5"
-    assert list(video.parent.iterdir()) == []
 
 
 def test_cache_is_read_back_so_captions_are_not_bought_twice(tmp_path):
-    video = tmp_path / "a.mp4"
-    sc = open_captions(tmp_path / "data", video, "a")
+    sc = open_captions(tmp_path / "data", "a")
     sc.put("a:0.0", 0.0, 8.0, parse_axes("cached"), "claude-haiku-4-5")
     sc.flush()
-    assert open_captions(tmp_path / "data", video, "a").get("a:0.0")["action"] == "cached"
-    assert open_captions(tmp_path / "data", video, "a").get("a:4.0") is None
-
-
-def test_captions_beside_the_footage_are_copied_in_and_left_alone(tmp_path):
-    video = tmp_path / "clips" / "a.mp4"
-    video.parent.mkdir()
-    old = CaptionCache(video.parent / "captions.csv")
-    old.put("a:0.0", 0.0, 8.0, parse_axes("bought earlier"), "m")
-    old.put("b:0.0", 0.0, 8.0, parse_axes("another video"), "m")
-    old.flush()
-    before = (video.parent / "captions.csv").read_bytes()
-
-    sc = open_captions(tmp_path / "data", video, "a")
-    assert sc.get("a:0.0")["action"] == "bought earlier"
-    assert sc.get("b:0.0") is None
-    sc.flush()
-    assert (video.parent / "captions.csv").read_bytes() == before
-    copied = list(csv.DictReader((tmp_path / "data" / "captions" / "a.csv").open()))
-    assert [r["id"] for r in copied] == ["a:0.0"]
-
-
-def test_rows_written_before_the_axes_existed_still_vote(tmp_path):
-    path = tmp_path / "captions.csv"
-    path.write_text("id,t0,t1,caption,model,written\n"
-                    "a:0.0,0.0,8.0,man vaulting a ledge in a park,m,2026-09-18\n")
-    sc = CaptionCache(path)
-    sc.vote()
-    assert sc.get("a:0.0")["action"] == "man vaulting a ledge in a park"
+    assert open_captions(tmp_path / "data", "a").get("a:0.0")["action"] == "cached"
+    assert open_captions(tmp_path / "data", "a").get("a:4.0") is None
 
 
 def test_caption_dir_override(tmp_path):
-    video = tmp_path / "a.mp4"
     out = tmp_path / "elsewhere"
-    sc = open_captions(tmp_path / "data", video, "a", caption_dir=out)
+    sc = open_captions(tmp_path / "data", "a", caption_dir=out)
     sc.put("a:0.0", 0.0, 8.0, parse_axes("c"), "m")
     sc.flush()
     assert (out / "captions.csv").exists()
@@ -399,7 +367,7 @@ def test_caption_pass_over_an_existing_index(tmp_path, synthetic_video):
     assert {r["id"]: list(map(float, r["vector"])) for r in rows} == before
     assert {h["id"] for h in store.text_search("kong")} == set(before)
     vid = next(iter(before)).split(":")[0]
-    cache = open_captions(tmp_path / "data", synthetic_video, vid)
+    cache = open_captions(tmp_path / "data", vid)
     assert all(cache.get(i)["action"] == "kong vault over a rail" for i in before)
 
 
