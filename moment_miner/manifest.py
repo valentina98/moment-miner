@@ -11,6 +11,9 @@ VIDEO_EXTS = {
     ".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".mts", ".m2ts",
     ".wmv", ".flv", ".ts", ".3gp", ".mpg", ".mpeg",
 }
+# A clip carries this prefix until it is completely written; one a crash left
+# behind is never indexed.
+PARTIAL = ".partial-"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS videos (
@@ -99,7 +102,7 @@ class Manifest:
         exported = {r[0] for r in self.conn.execute("SELECT path FROM exports")}
         seen = set()
         for p in sorted(Path(folder).resolve().rglob("*")):
-            if not p.is_file() or p.suffix.lower() not in VIDEO_EXTS:
+            if not p.is_file() or p.suffix.lower() not in VIDEO_EXTS or p.name.startswith(PARTIAL):
                 continue
             if on_host(p) in exported:
                 continue
