@@ -93,8 +93,8 @@ def test_a_calibration_timeout_drops_the_estimate_not_the_run(monkeypatch, capsy
     monkeypatch.setattr(calibrate, "load_rate", lambda *a: None)
     monkeypatch.setattr(calibrate, "calibrate", _hangs)
     backend = type("Backend", (), {"name": "mock"})()
-    assert cli._estimate("data", backend, [{"path": "hang.mp4"}], 4.0, 2.0, False,
-                         None) is None
+    assert cli._estimate("data", backend, [{"path": "hang.mp4"}], 4.0, 2.0,
+                         False) == (None, {})
     assert "estimate: unavailable" in capsys.readouterr().out
 
 
@@ -132,7 +132,8 @@ def test_a_killed_stream_copy_leaves_no_partial_clip(tmp_path, synthetic_video, 
     assert not out.exists()
 
 
-def test_a_file_the_estimate_cannot_probe_is_marked_failed_once(tmp_path, monkeypatch, capsys):
+def test_the_estimate_hands_a_file_it_cannot_probe_to_the_index_pass(
+        tmp_path, monkeypatch, capsys):
     from moment_miner import calibrate, cli
     from moment_miner.manifest import Manifest
 
@@ -151,9 +152,37 @@ def test_a_file_the_estimate_cannot_probe_is_marked_failed_once(tmp_path, monkey
     monkeypatch.setattr(calibrate, "load_rate", lambda *a: {"s_per_segment": 1.0})
     monkeypatch.setattr(calibrate, "probe", probe)
     backend = type("Backend", (), {"name": "mock"})()
-    assert cli._estimate("data", backend, manifest.pending(), 4.0, 2.0, False,
-                         manifest) is not None
-    assert "could not be probed, marked failed" in capsys.readouterr().out
-    [failed] = manifest.errors()
-    assert failed["path"].endswith("hang.mp4") and "FFmpegTimeout" in failed["error"]
-    assert [r["path"] for r in manifest.pending()] == [str(archive / "ok.mp4")]
+    eta, failed = cli._estimate("data", backend, manifest.pending(), 4.0, 2.0, False)
+    assert eta is not None
+    assert list(failed) == [str(archive / "hang.mp4")]
+    assert "FFmpegTimeout" in failed[str(archive / "hang.mp4")]
+    assert "could not be probed, skipped this run" in capsys.readouterr().out
+
+
+@requires_ffmpeg
+def test_a_file_the_estimate_failed_is_not_probed_again_and_the_next_run_retries_it(
+        tmp_path, synthetic_video, monkeypatch):
+    from moment_miner import indexer
+    from moment_miner.embeddings.mock import MockBackend
+    from moment_miner.manifest import Manifest
+    from moment_miner.store import SegmentStore
+
+    shutil.copy(synthetic_video, synthetic_video.parent / "hang.mp4")
+    manifest = Manifest(tmp_path / "data" / "manifest.db")
+    manifest.scan(synthetic_video.parent)
+    [hang] = [r["path"] for r in manifest.pending() if r["path"].endswith("hang.mp4")]
+    store = SegmentStore(tmp_path / "data", "mock")
+    probed = []
+    real_probe = indexer.probe
+    monkeypatch.setattr(indexer, "probe", lambda p: probed.append(p) or real_probe(p))
+
+    counts = indexer.index_pending(
+        manifest, store, MockBackend(), use_asr=False,
+        failed={hang: "FFmpegTimeout: ffprobe gave no result in 300 s"}, log=lambda *a: None)
+    assert counts["indexed"] == 1 and counts["errors"] == 1
+    assert hang not in probed
+    assert [r["path"] for r in manifest.errors()] == [hang]
+
+    again = indexer.index_pending(manifest, store, MockBackend(), use_asr=False,
+                                  log=lambda *a: None)
+    assert again["indexed"] == 1 and manifest.errors() == []

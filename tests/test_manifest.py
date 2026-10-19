@@ -114,12 +114,14 @@ def test_an_index_with_no_recorded_settings_needs_indexing(tmp_path):
     assert [r["path"] for r in m.pending(SETTINGS)] == [path]
 
 
-def test_an_errored_video_stays_out_of_pending(tmp_path):
-    """It has no settings row either, but it needs --reindex, not a retry on
-    every run."""
+def test_a_failed_video_is_retried_by_the_next_run(tmp_path):
+    """Without --reindex, which would redo every video in the folder."""
     m, path = _indexed(tmp_path)
     m.mark_error(path, "RuntimeError: no readable windows")
-    assert m.pending(SETTINGS) == [] and m.pending() == []
+    assert [r["path"] for r in m.pending(SETTINGS)] == [path]
+    assert [r["path"] for r in m.pending()] == [path]
+    assert (m.why_pending(m.pending(SETTINGS)[0], SETTINGS)
+            == "failed last time (RuntimeError: no readable windows)")
 
 
 def test_pending_in_a_folder_leaves_other_folders_alone(tmp_path):

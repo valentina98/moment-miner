@@ -103,7 +103,7 @@ def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex,
           caption_frames,
           caption_frames_short, caption_frames_long, short_video_s,
           long_video_s):
-    """Scan FOLDER recursively and index new/changed videos."""
+    """Scan FOLDER recursively and index new, changed and failed videos."""
     from .captions import MissingCaptionCredentials, get_caption_backend
     from .embeddings import get_backend
     from .indexer import index_pending, index_settings
@@ -118,8 +118,8 @@ def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex,
     settings = index_settings(be.name, window, stride)
     _report_stale_elsewhere(manifest, settings, folder)
     pending = manifest.pending(settings, folder)
-    eta = _estimate(data_dir, be, pending, window, stride, asr or bool(caption),
-                    manifest) if estimate and pending else None
+    eta, failed = (_estimate(data_dir, be, pending, window, stride, asr or bool(caption))
+                   if estimate and pending else (None, {}))
     store = SegmentStore(data_dir, be.name)
     started = time.time()
     try:
@@ -138,6 +138,7 @@ def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex,
             short_video_s=short_video_s,
             long_video_s=long_video_s,
             folder=folder,
+            failed=failed,
         )
     except MissingCaptionCredentials as e:
         raise click.ClickException(str(e)) from e
@@ -147,9 +148,9 @@ def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex,
     click.echo(f"done: {result}{took if pending else ''}")
 
 
-def _estimate(data_dir, be, pending, window, stride, extras, manifest):
-    """The ETA line. A file whose probe fails here is marked failed at once, so
-    the index pass does not wait on the same hung probe a second time."""
+def _estimate(data_dir, be, pending, window, stride, extras):
+    """The ETA line, and the files whose probe failed here, which the index
+    pass marks failed without waiting on the same hung probe a second time."""
     from .calibrate import calibrate, estimate, load_rate
 
     rate = load_rate(data_dir, be.name)
@@ -161,15 +162,14 @@ def _estimate(data_dir, be, pending, window, stride, extras, manifest):
         segments, seconds, eta, failed = estimate(pending, rate, window, stride)
     except Exception as e:
         click.echo(f"estimate: unavailable ({e})")
-        return None
+        return None, {}
     for path, error in failed.items():
-        manifest.mark_error(path, error)
-        click.echo(f"estimate: {path} could not be probed, marked failed ({error})")
+        click.echo(f"estimate: {path} could not be probed, skipped this run ({error})")
     note = "; ASR and captioning come on top" if extras else ""
     click.echo(f"estimate: {len(pending) - len(failed)} video(s), {seconds / 60:.1f} min of "
                f"video, {segments} segments, ~{eta / 60:.1f} min at "
                f"{rate['s_per_segment']} s/segment{note}")
-    return eta
+    return eta, failed
 
 
 @main.command()
