@@ -10,13 +10,11 @@ Footage without speech leaves that column empty, so the text half of the fusion 
 
 ## Where captions live
 
-`<data-dir>/captions/<video id>.csv`, one file per video, never beside the footage, which the tool only reads. The video id is a fingerprint of the file's content, so a video reached through another mount or after a rename finds its captions. `--caption-dir DIR` keeps a separate caption set in `DIR/captions.csv` instead, one file for every video, which is the shape `mm probe --captions` and `mm caption-compare` read.
-
-A `captions.csv` that an older version wrote beside the footage is read once, when a video has no cache file yet, and its rows for that video are copied in. That file is never written or deleted.
+`<data-dir>/captions/<video id>.csv`, one file per video. The video id is a fingerprint of the file's content, so a video reached through another mount or after a rename finds its captions. `--caption-dir DIR` keeps a separate caption set in `DIR/captions.csv` instead, one file for every video, which is the shape `mm probe --captions` and `mm caption-compare` read.
 
 They are separate files on purpose. **Captions are machine-written indexed content; labels are human-checked ground truth.** Scoring captions against labels written by the same model measures agreement, not accuracy, so a caption is never also the label it is scored against.
 
-Columns: `id,t0,t1,action,who,scene,light,caption,model,written`. Rows written before the axes existed carry only `caption`, and the axes are read from it.
+Columns: `id,t0,t1,action,who,scene,light,caption,model,written`.
 
 Captions are read back on the next pass. Re-indexing a folder — including `--reindex` — reuses the captions already on disk and only spends on segments that don't have one. Re-indexing without `--caption` spends nothing and keeps each segment's stored caption in its searchable text, as long as the segment geometry is unchanged. This is why the cache sits beside the index rather than in it: a caption costs session quota (money only on the API-key route), so re-indexing, a model change or a deleted index never touches `captions/`.
 

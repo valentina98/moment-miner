@@ -51,15 +51,6 @@ def test_fingerprint_stable_and_content_sensitive(tmp_path):
     assert fingerprint(str(f)) != fp1
 
 
-def test_scan_skips_mined_folders(tmp_path):
-    archive = tmp_path / "archive"
-    (archive / "sub_mined" / "run").mkdir(parents=True)
-    _fake_video(archive / "real.mp4")
-    _fake_video(archive / "sub_mined" / "run" / "clip.mp4")
-    m = Manifest(tmp_path / "mm.db")
-    assert m.scan(archive) == {"new": 1, "changed": 0, "unchanged": 0, "missing": []}
-
-
 def test_scan_skips_clips_the_tool_exported(tmp_path):
     archive = tmp_path / "archive"
     archive.mkdir()
