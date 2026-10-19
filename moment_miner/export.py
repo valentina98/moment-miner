@@ -146,7 +146,7 @@ def smart_cut(path: str, start: float, end: float, out: str) -> tuple[str, float
 
 
 def write_llc_projects(hits: list[dict], out_dir: str | Path,
-                       query: str = "") -> tuple[list[str], list[str]]:
+                       query: str) -> tuple[list[str], list[str]]:
     """One LosslessCut project per video, `<video>-<query>.llc`, its hits as
     cut segments, in rank order of the list given. The spans are written as
     given, so what LosslessCut shows is what `mm cut` cuts. Returns

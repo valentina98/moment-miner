@@ -24,7 +24,7 @@ from .timefmt import fmt_ts, parse_ts
                    "folder works, a footage folder included.")
 @click.pass_context
 def main(ctx, data_dir):
-    """Moment Miner: search large video archives, export lossless clips."""
+    """Moment Miner: search large video archives, cut lossless clips."""
     ctx.obj = Path(data_dir).expanduser()
     guard.arm(ctx.obj)
     ctx.call_on_close(guard.disarm)
@@ -354,7 +354,7 @@ def search(data_dir, query, k, backend, as_json, output, pad, static, static_max
     project per video with the hits as segments. Cuts nothing: `mm cut`
     does, once the projects look right."""
     from .embeddings import get_backend
-    from .export import write_llc_projects
+    from .export import slug, write_llc_projects
     from .search import search as run_search
 
     be = get_backend(backend)
@@ -383,7 +383,7 @@ def search(data_dir, query, k, backend, as_json, output, pad, static, static_max
         return
     if output:
         guard.output(output)
-    written, taken = write_llc_projects(hits, output or _cut_dir(data_dir, query), query)
+    written, taken = write_llc_projects(hits, output or _cut_dir(data_dir, slug(query)), query)
     for f in written:
         click.echo(f"project: {on_host(f)}", err=as_json)
     _end_run(taken=taken)
@@ -468,12 +468,11 @@ def _new_file(folder: Path, name: str) -> Path:
 
 
 def _cut_dir(data_dir: Path, name: str) -> Path:
-    """`<data-dir>/cuts/<name>_<time>/`, a new folder for each run."""
+    """`<data-dir>/cuts/<name>_<time>/`, a new folder for each run; `name`
+    must already be safe in a file name."""
     from datetime import datetime
 
-    from .export import slug
-
-    return data_dir / "cuts" / f"{slug(name)}_{datetime.now():%Y-%m-%d_%H-%M-%S}"
+    return data_dir / "cuts" / f"{name}_{datetime.now():%Y-%m-%d_%H-%M-%S}"
 
 
 def _ts_or_reprompt(value: str) -> float:

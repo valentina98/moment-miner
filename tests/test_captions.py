@@ -310,48 +310,12 @@ def test_check_writable_fails_before_spending(tmp_path, monkeypatch):
 
 # --- the indexer path -----------------------------------------------------
 
-def test_indexer_appends_caption_to_the_transcript_text(tmp_path, monkeypatch):
+def test_indexing_never_captions(tmp_path, monkeypatch):
     from moment_miner import indexer
 
     monkeypatch.setattr(indexer, "probe", lambda p: {"duration": 8.0, "has_audio": False})
     monkeypatch.setattr(indexer, "extract_windows",
                         lambda path, spans, **k: ((t0, t1, frames(8)) for t0, t1 in spans))
-
-    class M:
-        def pending(self, settings=None, folder=None): return [{"id": "a", "path": str(tmp_path / "a.mp4")}]
-        def why_pending(self, row, settings): return "new or changed file"
-        def transcript_between(self, *a): return "spoken words"
-        def mark_done(self, *a): pass
-        def mark_error(self, *a): raise AssertionError("indexing failed")
-
-    class S:
-        def __init__(self): self.rows = []
-        def delete_path(self, p): pass
-        def add(self, rows): self.rows += rows
-        def rebuild_fts(self): pass
-
-    class E:
-        name = "mock"
-        def embed_segment(self, f): return np.zeros(4, dtype=np.float32)
-
-    store = S()
-    counts = indexer.index_pending(
-        M(), store, E(), use_asr=False, data_dir=tmp_path / "data",
-        caption_backend=MockCaptionBackend(), log=lambda *a: None,
-    )
-    assert counts["captioned"] == len(store.rows)
-    assert all(r["text"].startswith("spoken words mock caption") for r in store.rows)
-
-
-def test_indexer_without_caption_backend_spends_nothing(tmp_path, monkeypatch):
-    from moment_miner import indexer
-
-    monkeypatch.setattr(indexer, "probe", lambda p: {"duration": 8.0, "has_audio": False})
-    monkeypatch.setattr(indexer, "extract_windows",
-                        lambda path, spans, **k: ((t0, t1, frames(8)) for t0, t1 in spans))
-
-    class Boom(MockCaptionBackend):
-        def caption(self, *a): raise AssertionError("captioned without being asked")
 
     class M:
         def pending(self, settings=None, folder=None): return [{"id": "a", "path": str(tmp_path / "a.mp4")}]

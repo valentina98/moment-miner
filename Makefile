@@ -113,7 +113,7 @@ status: image
 # Keys only for the hosted ranker.
 probe: image
 	@test -f "$(PROMPTS)" || { echo "no prompts file at $(PROMPTS) -- write one, or pass PROMPTS=<path>"; exit 1; }
-	$(if $(filter jev,$(RANKER)),$(RUN),$(RUN_NO_KEYS)) $(IMAGE) probe "$(abspath $(PROMPTS))" --axis $(AXIS) --ranker $(RANKER) -k $(K) $(ARGS)
+	$(if $(filter jev,$(RANKER)),$(RUN),$(RUN_NO_KEYS)) -v "$(abspath $(PROMPTS))":/prompts.txt:ro $(IMAGE) probe /prompts.txt --axis $(AXIS) --ranker $(RANKER) -k $(K) $(ARGS)
 
 serve: image
 	$(RUN_NO_KEYS) -p $(PORT):$(PORT) $(IMAGE) serve --host 0.0.0.0 --port $(PORT) $(ARGS)

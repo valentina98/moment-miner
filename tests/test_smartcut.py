@@ -48,7 +48,7 @@ def test_keyframe_helpers(fast_video):
 @requires_ffmpeg
 def test_smart_cut_is_frame_accurate_at_both_ends(tmp_path, fast_video):
     out = tmp_path / "smart.mp4"
-    _, a0, a1 = export_clip(str(fast_video), 2.2, 4.0, str(out), pad=0.0)
+    _, a0, a1 = export_clip(str(fast_video), 2.2, 4.0, str(out))
 
     assert abs(a0 - 2.2) < 1e-6 and abs(a1 - 4.0) < 1e-6
     # Both boundaries are cut, so the duration lands within a frame either way.
@@ -65,7 +65,7 @@ def test_smart_cut_interior_is_the_untouched_source(tmp_path, fast_video):
     starting four frames early.
     """
     out = tmp_path / "smart.mp4"
-    export_clip(str(fast_video), 2.2, 4.0, str(out), pad=0.0)
+    export_clip(str(fast_video), 2.2, 4.0, str(out))
 
     # 2.7 s is past the first keyframe after 2.2 s, so it is copied, not recoded.
     source = _decoded(str(fast_video), 2.7, 0.2)
@@ -76,7 +76,7 @@ def test_smart_cut_interior_is_the_untouched_source(tmp_path, fast_video):
 @requires_ffmpeg
 def test_no_smart_snaps_back_to_a_keyframe(tmp_path, fast_video):
     out = tmp_path / "snapped.mp4"
-    _, a0, _ = export_clip(str(fast_video), 2.2, 4.0, str(out), pad=0.0, smart=False)
+    _, a0, _ = export_clip(str(fast_video), 2.2, 4.0, str(out), smart=False)
     assert abs(a0 - 2.0) < 0.05
     assert probe(str(out))["duration"] > 1.8
 
@@ -85,7 +85,7 @@ def test_no_smart_snaps_back_to_a_keyframe(tmp_path, fast_video):
 def test_smart_cut_video_only_source(tmp_path, silent_video):
     """Canon clips are not all the same shape: 2M4A2377.MP4 has no audio."""
     out = tmp_path / "silent_cut.mp4"   # not the fixture's own path
-    _, a0, a1 = export_clip(str(silent_video), 1.0, 2.0, str(out), pad=0.0)
+    _, a0, a1 = export_clip(str(silent_video), 1.0, 2.0, str(out))
     assert abs(a0 - 1.0) < 1e-6 and abs(a1 - 2.0) < 1e-6
     assert _stream_kinds(str(out)) == ["video"]
     assert not probe(str(out))["has_audio"]
