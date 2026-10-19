@@ -8,6 +8,7 @@ from pathlib import Path
 
 import click
 
+from . import guard
 from .locate import LOCATORS
 from .manifest import Manifest
 from .motion import STATIC_MAX
@@ -17,12 +18,20 @@ from .timefmt import fmt_ts, parse_ts
 
 @click.group()
 @click.version_option(package_name="moment-miner", prog_name="mm")
-@click.option("--data-dir", default="mm_data", show_default=True,
-              help="Where the index lives.")
+@click.option("--data-dir", default="~/.mm_data", show_default=True,
+              help="Where everything the tool keeps lives: the index, the "
+                   "caption cache, labels and exported clips (cuts/). Never "
+                   "inside a footage folder.")
 @click.pass_context
 def main(ctx, data_dir):
     """Moment Miner: search large video archives, export lossless clips."""
-    ctx.obj = Path(data_dir)
+    ctx.obj = Path(data_dir).expanduser()
+    guard.arm(ctx.obj)
+    ctx.call_on_close(guard.disarm)
+    default = ctx.get_parameter_source("data_dir") == click.core.ParameterSource.DEFAULT
+    if default and Path("mm_data").is_dir():
+        click.echo(f"note: ./mm_data is not read; the data folder is {ctx.obj}. "
+                   "Pass --data-dir mm_data to use it, or move it there.", err=True)
 
 
 def _ranker_names() -> list[str]:
@@ -70,8 +79,8 @@ def help_cmd(ctx, command):
                    "claude-haiku-4-5) and add it to the searchable text. "
                    "Spends session quota via Claude Code credentials; "
                    "ANTHROPIC_API_KEY spends money and needs --allow-paid "
-                   "with --paid-budget-usd. Captions are cached beside the "
-                   "footage.")
+                   "with --paid-budget-usd. Captions are cached in the data "
+                   "folder and reused on re-index.")
 @click.option("--allow-paid", is_flag=True, default=False,
               help="Permit the ANTHROPIC_API_KEY route, which spends money. "
                    "Refused without --paid-budget-usd.")
@@ -79,8 +88,8 @@ def help_cmd(ctx, command):
               help="The cap you accept for this pass, in USD. Required by "
                    "--allow-paid; a gate before the first request, not a meter.")
 @click.option("--caption-dir", default=None,
-              help="Write caption sidecars here instead of beside each video "
-                   "(use when the archive is mounted read-only).")
+              help="Keep this caption set in DIR/captions.csv instead of the "
+                   "data folder's cache, e.g. to compare two prompts.")
 @click.option("--caption-prompt", default="general", show_default=True,
               help="Caption prompt: a shipped name (see `mm caption --help`) or a file path.")
 @click.option("--caption-frames", default=None, type=int,
@@ -108,6 +117,8 @@ def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex,
     from .embeddings import get_backend
     from .indexer import index_pending, index_settings
 
+    if caption_dir:
+        guard.output(caption_dir)
     manifest = Manifest(data_dir / "manifest.db")
     counts = manifest.scan(folder)
     if reindex:
@@ -131,7 +142,7 @@ def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex,
             caption_backend=get_caption_backend(
                 caption, allow_paid=allow_paid, prompt=caption_prompt,
                 paid_budget_usd=paid_budget_usd) if caption else None,
-            caption_dir=caption_dir,
+            data_dir=data_dir, caption_dir=caption_dir,
             caption_frames=caption_frames,
             caption_frames_short=caption_frames_short,
             caption_frames_long=caption_frames_long,
@@ -244,7 +255,8 @@ def _frame_size(ctx, param, value):
                    "embedding's. Stills wider than 640 px are downscaled "
                    "before sending.")
 @click.option("--caption-dir", default=None,
-              help="Write caption sidecars here instead of beside each video.")
+              help="Keep this caption set in DIR/captions.csv instead of the "
+                   "data folder's cache, e.g. to compare two prompts.")
 @click.option("--caption-prompt", default="general", show_default=True,
               help="Caption prompt: a shipped name (see `mm caption --help`) or a file path.")
 @click.option("--caption-frames", default=None, type=int,
@@ -257,7 +269,7 @@ def _frame_size(ctx, param, value):
 @click.option("--short-video", "short_video_s", default=8.0, show_default=True)
 @click.option("--long-video", "long_video_s", default=120.0, show_default=True)
 @click.option("--force", is_flag=True,
-              help="Caption again even where the sidecar already has one.")
+              help="Caption again even where the cache already has one.")
 @click.pass_obj
 def caption(data_dir, folder, model, backend, frame_size, caption_dir,
             caption_prompt, caption_frames, caption_frames_short, caption_frames_long,
@@ -270,6 +282,8 @@ def caption(data_dir, folder, model, backend, frame_size, caption_dir,
     from .captions import get_caption_backend
     from .indexer import caption_indexed
 
+    if caption_dir:
+        guard.output(caption_dir)
     store = SegmentStore(data_dir, backend)
     try:
         result = caption_indexed(
@@ -277,14 +291,14 @@ def caption(data_dir, folder, model, backend, frame_size, caption_dir,
             get_caption_backend(model, prompt=caption_prompt),
             folder, frame_w=frame_size[0], frame_h=frame_size[1],
             axis_store=AxisStore(data_dir),
-            caption_dir=caption_dir, caption_frames=caption_frames,
+            data_dir=data_dir, caption_dir=caption_dir, caption_frames=caption_frames,
             caption_frames_short=caption_frames_short,
             caption_frames_long=caption_frames_long,
             short_video_s=short_video_s, long_video_s=long_video_s,
             force=force, log=click.echo,
         )
     except RuntimeError as e:
-        # Missing credentials, a read-only archive, or no index yet.
+        # Missing credentials, an unwritable cache, or no index yet.
         raise click.ClickException(str(e)) from e
     click.echo(f"done: {result}")
 
@@ -293,16 +307,15 @@ def caption(data_dir, folder, model, backend, frame_size, caption_dir,
 @click.argument("caption_files", nargs=-1, required=True,
                 type=click.Path(exists=True, dir_okay=False))
 @click.option("-o", "--out", default=None, type=click.Path(dir_okay=False),
-              help="Where to write the page. Defaults to "
-                   "caption-comparison.html inside --videos, so everything "
-                   "about an archive stays on the archive.")
+              help="Where to write the page [default: "
+                   "caption-comparison.html in the data folder].")
 @click.option("--videos", default=None, type=click.Path(exists=True, file_okay=False),
               help="Folder holding the videos, so the page can show each "
                    "segment's stills. Omit for a text-only page.")
 @click.option("--segments", "segments_file", default=None,
               type=click.Path(exists=True, dir_okay=False),
               help="seg,video,t0,t1 CSV, needed when the caption files carry "
-                   "only seg,caption instead of the sidecar columns.")
+                   "only seg,caption instead of the caption-cache columns.")
 @click.option("--frames-dir", default=None, type=click.Path(exists=True, file_okay=False),
               help="Use stills already extracted here, named <seg id>_*.jpg, "
                    "instead of decoding the videos.")
@@ -310,7 +323,9 @@ def caption(data_dir, folder, model, backend, frame_size, caption_dir,
               help="Hide which file wrote which caption and shuffle their "
                    "order, so a comparison can be judged without knowing.")
 @click.option("--seed", default=0, show_default=True, help="Shuffle seed.")
-def caption_compare(caption_files, out, videos, segments_file, frames_dir, blind, seed):
+@click.pass_obj
+def caption_compare(data_dir, caption_files, out, videos, segments_file, frames_dir,
+                    blind, seed):
     """Render CAPTION_FILES side by side as one HTML page.
 
     Marks where the models disagree, and by default hides which file is which
@@ -318,14 +333,16 @@ def caption_compare(caption_files, out, videos, segments_file, frames_dir, blind
     """
     from .compare import build
 
+    if out:
+        guard.output(Path(out).parent)
     html, order_map = build(
         [Path(f) for f in caption_files], videos=Path(videos) if videos else None,
         segments_file=Path(segments_file) if segments_file else None,
         frames_dir=Path(frames_dir) if frames_dir else None,
         blind=blind, seed=seed,
     )
-    out_path = Path(out) if out else (
-        Path(videos) if videos else Path(".")) / "caption-comparison.html"
+    out_path = Path(out) if out else data_dir / "caption-comparison.html"
+    guard.writable(out_path).parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(html)
     click.echo(f"wrote {out_path} ({out_path.stat().st_size / 1e6:.1f} MB)")
     if blind:
@@ -343,8 +360,8 @@ def caption_compare(caption_files, out, videos, segments_file, frames_dir, blind
 @click.option("--backend", default="siglip", show_default=True)
 @click.option("--json", "as_json", is_flag=True)
 @click.option("--llc", is_flag=True,
-              help="Write LosslessCut projects (.llc) into an llc/ subfolder "
-                   "next to each matched video.")
+              help="Write LosslessCut projects (.llc) into "
+                   "DATA_DIR/cuts/<query>_<time>/.")
 @click.option("--llc-dir", default=None,
               help="Write .llc files here instead; media is referenced "
                    "relatively, so open them in place (don't move them).")
@@ -368,31 +385,38 @@ def search(data_dir, query, k, backend, as_json, llc, llc_dir, static,
     hits = run_search(query, be, store, k=k, static=static,
                       motion_store=MotionStore(data_dir),
                       static_max=static_max)
+    taken: list[str] = []
     if (llc or llc_dir) and hits:
         from .export import write_llc_projects
 
-        for f in write_llc_projects(hits, llc_dir, label=query):
+        if llc_dir:
+            guard.output(llc_dir)
+        written, taken = write_llc_projects(hits, llc_dir or _cut_dir(data_dir, query),
+                                            label=query)
+        for f in written:
             click.echo(f"llc: {f}")
     if as_json:
         click.echo(jsonlib.dumps(
             [{k_: h[k_] for k_ in ("path", "t0", "t1", "score", "text")}
              for h in hits], indent=2))
-        return
-    if not hits:
+    elif not hits:
         click.echo("no results")
-        return
-    for h in hits:
-        click.echo(f"{h['path']}\n  {fmt_ts(h['t0'])} - {fmt_ts(h['t1'])}"
-                   f"  (score {h['score']:.4f})")
-        if h.get("text"):
-            click.echo(f"  \"{h['text'][:120]}\"")
+    else:
+        for h in hits:
+            click.echo(f"{h['path']}\n  {fmt_ts(h['t0'])} - {fmt_ts(h['t1'])}"
+                       f"  (score {h['score']:.4f})")
+            if h.get("text"):
+                click.echo(f"  \"{h['text'][:120]}\"")
+    _fail_if_taken(taken, ".llc project")
 
 
 @main.command()
 @click.argument("video")
 @click.argument("t0")
 @click.argument("t1")
-@click.option("-o", "--output", default=None, help="Output file path.")
+@click.option("-o", "--output", default=None,
+              help="Output file, or a folder to name it in "
+                   "[default: DATA_DIR/cuts/<video>-<from>-<to><ext>].")
 @click.option("--pad", default=1.0, show_default=True)
 @click.option("--snap/--no-snap", default=True, show_default=True,
               help="Snap start to previous keyframe (fully lossless).")
@@ -411,22 +435,31 @@ def export(data_dir, video, t0, t1, output, pad, snap, smart):
         raise click.BadParameter(f"video not found: {video}")
     start, end = parse_ts(t0), parse_ts(t1)
     if output is None:
-        stem = Path(path).stem
-        output = f"{stem}_{fmt_ts(start).replace(':', '-')}_{fmt_ts(end).replace(':', '-')}.mp4"
-    out, a0, a1 = export_clip(path, start, end, output, pad=pad, snap=snap, smart=smart)
+        output = data_dir / "cuts"
+        guard.writable(output).mkdir(parents=True, exist_ok=True)
+    else:
+        guard.output(output if Path(output).is_dir() else Path(output).parent)
+    out, a0, a1 = export_clip(path, start, end, str(output), pad=pad, snap=snap, smart=smart)
+    manifest.add_export(out)
     click.echo(f"wrote {out} ({fmt_ts(a0)} - {fmt_ts(a1)} of source)")
 
 
 @main.command()
-@click.argument("labels", type=click.Path(exists=True, dir_okay=False))
+@click.argument("labels", required=False, type=click.Path(dir_okay=False))
 @click.option("-k", default=10, show_default=True)
 @click.option("--backend", default="siglip", show_default=True)
 @click.pass_obj
 def eval(data_dir, labels, k, backend):
-    """Score search quality against a labels CSV (query,video,start,end)."""
+    """Score search quality against a labels CSV (query,video,start,end)
+    [default: DATA_DIR/labels.csv, where `mm annotate` writes]."""
     from .embeddings import get_backend
     from .evaluate import evaluate, load_labels
+    from .hostpaths import on_host
 
+    labels = Path(labels) if labels else data_dir / "labels.csv"
+    if not labels.is_file():
+        raise click.ClickException(f"no labels file at {on_host(labels)}")
+    click.echo(f"labels: {on_host(labels)}")
     be = get_backend(backend)
     store = SegmentStore(data_dir, be.name)
     report = evaluate(load_labels(labels), be, store, k=k)
@@ -438,14 +471,23 @@ def eval(data_dir, labels, k, backend):
     )
 
 
-def _default_mine_out(folder: str, query: str) -> Path:
+def _fail_if_taken(taken: list[str], what: str) -> None:
+    """End a run that skipped files because their names were taken, so the
+    skip is the last thing printed and the exit code says it."""
+    if taken:
+        raise click.ClickException(
+            f"{len(taken)} {what}(s) not written, the name was taken:\n  "
+            + "\n  ".join(taken))
+
+
+def _cut_dir(data_dir: Path, query: str) -> Path:
+    """`<data-dir>/cuts/<query>_<time>/`, one folder per run."""
     import re
     from datetime import datetime
 
-    src = Path(folder).resolve()
     slug = re.sub(r"[^a-z0-9]+", "-", query.lower()).strip("-")[:40] or "query"
     stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    return src.parent / f"{src.name}_mined" / f"{slug}_{stamp}"
+    return data_dir / "cuts" / f"{slug}_{stamp}"
 
 
 @main.command()
@@ -453,7 +495,7 @@ def _default_mine_out(folder: str, query: str) -> Path:
 @click.argument("folder", type=click.Path(exists=True, file_okay=False))
 @click.option("-o", "--output", default=None,
               help="Folder for the exported clips "
-                   "[default: <FOLDER>_mined/<query>_<timestamp>/ next to FOLDER].")
+                   "[default: DATA_DIR/cuts/<query>_<timestamp>/].")
 @click.option("-k", default=5, show_default=True, help="Export top-k matches.")
 @click.option("--backend", default="siglip", show_default=True)
 @click.option("--pad", default=1.0, show_default=True)
@@ -465,10 +507,13 @@ def mine(data_dir, query, folder, output, k, backend, pad, asr, smart):
     """One shot: index FOLDER (only new/changed videos), search QUERY,
     export the top-k matching moments as lossless clips into OUTPUT."""
     from .embeddings import get_backend
-    from .export import export_clip
+    from .export import NameTaken, export_clip
     from .indexer import index_pending, index_settings
     from .search import search as run_search
 
+    if output:
+        guard.output(output)
+        guard.writable(output)
     manifest = Manifest(data_dir / "manifest.db")
     be = get_backend(backend)
     _forget_missing(manifest, manifest.scan(folder), data_dir, be.name, folder)
@@ -485,13 +530,19 @@ def mine(data_dir, query, folder, output, k, backend, pad, asr, smart):
     if not hits:
         click.echo("no results")
         return
-    output = Path(output) if output else _default_mine_out(folder, query)
-    output.mkdir(parents=True, exist_ok=True)
+    output = Path(output) if output else _cut_dir(data_dir, query)
+    guard.writable(output).mkdir(parents=True, exist_ok=True)
+    taken = []
     for i, h in enumerate(hits, 1):
-        name = f"{i:02d}_{Path(h['path']).stem}_{fmt_ts(h['t0']).replace(':', '-')}.mp4"
-        out, _, _ = export_clip(h["path"], h["t0"], h["t1"],
-                                str(Path(output) / name), pad=pad, smart=smart)
+        try:
+            out, _, _ = export_clip(h["path"], h["t0"], h["t1"], str(output),
+                                    pad=pad, smart=smart, prefix=f"{i:02d}_")
+        except NameTaken as e:
+            taken.append(e.path)
+            continue
+        manifest.add_export(out)
         click.echo(f"{out}  ← {h['path']} {fmt_ts(h['t0'])}-{fmt_ts(h['t1'])}")
+    _fail_if_taken(taken, "clip")
 
 
 def _ts_or_reprompt(value: str) -> float:
@@ -513,18 +564,21 @@ def _template_names() -> list[str]:
 @click.option("--template", "template_name", default=None,
               help="Start labels.csv from a template if it doesn't exist yet.")
 @click.option("--labels", "labels_path", default=None,
-              help="Labels file [default: FOLDER/labels.csv].")
-def annotate(folder, template_name, labels_path):
+              help="Labels file [default: DATA_DIR/labels.csv].")
+@click.pass_obj
+def annotate(data_dir, folder, template_name, labels_path):
     """Interactively append ground-truth labels for videos in FOLDER.
 
-    Labels live with the footage (FOLDER/labels.csv) so `mm eval` and
-    `make eval` find them. Watch the video in any player, then enter the
-    times here.
+    Labels go to the data folder, never beside the footage, which is only
+    read. Watch the video in any player, then enter the times here.
     """
     from .manifest import VIDEO_EXTS
 
-    labels = Path(labels_path) if labels_path else Path(folder) / "labels.csv"
+    if labels_path:
+        guard.output(Path(labels_path).parent)
+    labels = guard.writable(Path(labels_path) if labels_path else data_dir / "labels.csv")
     if not labels.exists():
+        labels.parent.mkdir(parents=True, exist_ok=True)
         if template_name:
             src = pkg_files("moment_miner") / "templates" / f"labels_{template_name}.csv"
             if not src.is_file():
@@ -612,7 +666,7 @@ def status(data_dir, show_errors):
 @click.argument("prompts", type=click.Path(exists=True, dir_okay=False))
 @click.option("--captions", "captions_path", default=None,
               type=click.Path(exists=True, dir_okay=False),
-              help="A captions.csv written by `mm caption`. Defaults to the "
+              help="A caption set written by `mm caption`. Defaults to the "
                    "axes already in the index.")
 @click.option("--axis", default="caption", show_default=True,
               type=click.Choice(["caption", "action", "who", "scene", "light"]),
@@ -720,6 +774,9 @@ def locate(query, video, labels, videos, fps, locator_name, duration, top_k, bac
     else:
         raise click.UsageError("give --query and --video, or --labels and --videos")
 
+    if out:
+        guard.output(Path(out).parent)
+        guard.writable(out)
     be = get_backend(backend)
     loc = build_locator(locator_name, duration=duration, top_k=top_k)
     root = Path(videos) if videos else None

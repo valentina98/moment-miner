@@ -71,7 +71,7 @@ def agreement(captions: list[str]) -> dict:
 def read_captions(path: Path) -> dict[str, dict]:
     """A caption CSV, keyed by segment id.
 
-    Accepts the sidecar schema written by `mm index --caption`
+    Accepts the caption-cache columns written by `mm index --caption`
     (id,t0,t1,caption,...) and the bare seg,caption shape, which needs a
     --segments file to supply timings.
     """

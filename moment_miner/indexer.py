@@ -9,13 +9,14 @@ from .captions import (
     LONG_VIDEO_S,
     SHORT_VIDEO_S,
     CaptionBackend,
-    CaptionSidecar,
     joined,
     frames_for_duration,
+    open_captions,
     still_times,
 )
 from .embeddings.base import EmbeddingBackend
 from .frames import FRAME_H, FRAME_W, extract_stills, extract_windows
+from .guard import WriteRefused
 from .manifest import Manifest
 from .motion import moving_fraction
 from .probe import probe
@@ -103,6 +104,7 @@ def index_pending(
     stride: float = DEFAULT_STRIDE,
     frames_per_window: int = DEFAULT_FRAMES_PER_WINDOW,
     caption_backend: CaptionBackend | None = None,
+    data_dir=None,
     caption_dir=None,
     motion_store: MotionStore | None = None,
     axis_store: AxisStore | None = None,
@@ -133,14 +135,14 @@ def index_pending(
                 from .asr import transcribe
 
                 manifest.add_transcript(vid, transcribe(path, model_size=asr_model))
-            sidecar = None
+            cache = None
             n_caption_frames = frames_for_duration(
                 duration, short=caption_frames_short, normal=caption_frames,
                 long=caption_frames_long, short_video_s=short_video_s,
                 long_video_s=long_video_s)
             if caption_backend is not None:
-                sidecar = CaptionSidecar(path, caption_dir)
-                sidecar.check_writable()
+                cache = open_captions(data_dir, path, vid, caption_dir)
+                cache.check_writable()
             rows, motion_rows = [], []
             unreadable = 0
             spans = windows(duration, win, stride)
@@ -156,12 +158,12 @@ def index_pending(
                     continue
                 seg_id = f"{vid}:{t0:.1f}"
                 text = manifest.transcript_between(vid, t0, t1)
-                if sidecar is not None:
-                    axes = sidecar.get(seg_id)
+                if cache is not None:
+                    axes = cache.get(seg_id)
                     if axes is None:
                         axes = caption_backend.caption(
                             frames, t1 - t0, n_caption_frames, stride)
-                        sidecar.put(seg_id, t0, t1, axes, caption_backend.name)
+                        cache.put(seg_id, t0, t1, axes, caption_backend.name)
                         counts["captioned"] += 1
                     text = f"{text} {joined(axes)}".strip()
                 rows.append({
@@ -182,12 +184,12 @@ def index_pending(
                 })
             if not rows:
                 raise RuntimeError(f"no readable windows ({unreadable} failed)")
-            if sidecar is not None:
-                sidecar.vote()
-                sidecar.flush()
+            if cache is not None:
+                cache.vote()
+                cache.flush()
                 axis_rows = []
                 for row in rows:
-                    voted = sidecar.get(row["id"])
+                    voted = cache.get(row["id"])
                     if voted is not None:
                         spoken = manifest.transcript_between(
                             row["video_id"], row["t0"], row["t1"])
@@ -215,6 +217,8 @@ def index_pending(
             counts["segments"] += len(rows)
             note = f" ({unreadable} unreadable skipped)" if unreadable else ""
             log(f"    {len(rows)} segments in {time.time() - t_start:.1f}s{note}")
+        except WriteRefused:
+            raise
         except Exception as e:
             manifest.mark_error(path, f"{type(e).__name__}: {e}")
             counts["errors"] += 1
@@ -231,6 +235,7 @@ def caption_indexed(
     folder,
     frame_w: int = 640,
     frame_h: int = 360,
+    data_dir=None,
     caption_dir=None,
     axis_store: AxisStore | None = None,
     caption_frames: int | None = None,
@@ -249,7 +254,7 @@ def caption_indexed(
     frees the raster: `index --caption` can only show the model the 456x256
     frames decoded for the embedding.
 
-    A segment with a sidecar caption is not bought again unless `force`; its
+    A segment with a cached caption is not bought again unless `force`; its
     cached caption is still written into the row, so an index built without
     --caption picks up captions bought earlier.
     """
@@ -271,12 +276,12 @@ def caption_indexed(
             max(r["t1"] for r in rows), short=caption_frames_short,
             normal=caption_frames, long=caption_frames_long,
             short_video_s=short_video_s, long_video_s=long_video_s)
-        sidecar = CaptionSidecar(path, caption_dir)
-        sidecar.check_writable()
+        cache = open_captions(data_dir, path, rows[0]["video_id"], caption_dir)
+        cache.check_writable()
         try:
             for r in sorted(rows, key=lambda r: r["t0"]):
                 t0, t1 = r["t0"], r["t1"]
-                axes = None if force else sidecar.get(r["id"])
+                axes = None if force else cache.get(r["id"])
                 if axes is None:
                     stills = extract_stills(
                         path, still_times(t0, t1, stride, n_frames, per_window),
@@ -285,7 +290,7 @@ def caption_indexed(
                         log(f"    {r['id']}: no frames decoded, skipped")
                         continue
                     axes = caption_backend.caption(stills, t1 - t0, n_frames, stride)
-                    sidecar.put(r["id"], t0, t1, axes, caption_backend.name)
+                    cache.put(r["id"], t0, t1, axes, caption_backend.name)
                     counts["captioned"] += 1
                 else:
                     counts["reused"] += 1
@@ -298,13 +303,13 @@ def caption_indexed(
             log(f"    ERROR: {e}")
         finally:
             # Captions already paid for are kept even when a later one fails.
-            sidecar.vote()
-            sidecar.flush()
+            cache.vote()
+            cache.flush()
             # The vote can change rows already written, so the store is
-            # refreshed from the sidecar rather than from the per-segment pass.
+            # refreshed from the cache rather than from the per-segment pass.
             axis_rows = []
             for r in rows:
-                voted = sidecar.get(r["id"])
+                voted = cache.get(r["id"])
                 if voted is None:
                     continue
                 text = (f"{manifest.transcript_between(r['video_id'], r['t0'], r['t1'])} "

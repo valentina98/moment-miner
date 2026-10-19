@@ -60,6 +60,27 @@ def test_scan_skips_mined_folders(tmp_path):
     assert m.scan(archive) == {"new": 1, "changed": 0, "unchanged": 0, "missing": []}
 
 
+def test_scan_skips_clips_the_tool_exported(tmp_path):
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    _fake_video(archive / "real.mp4")
+    _fake_video(archive / "01_real-00.00.01.000-00.00.03.000.mp4")
+    m = Manifest(tmp_path / "mm.db")
+    m.add_export(archive / "01_real-00.00.01.000-00.00.03.000.mp4")
+    assert m.scan(archive) == {"new": 1, "changed": 0, "unchanged": 0, "missing": []}
+
+
+def test_scan_knows_an_export_written_through_another_mount(tmp_path, monkeypatch):
+    videos, out = tmp_path / "videos", tmp_path / "out"
+    (videos / "day1").mkdir(parents=True)
+    _fake_video(videos / "day1" / "real.mp4")
+    _fake_video(videos / "day1" / "clip.mp4")
+    monkeypatch.setenv("MM_HOST_PATHS", f"{videos}=/host/f;{out}=/host/f/day1")
+    m = Manifest(tmp_path / "mm.db")
+    m.add_export(out / "clip.mp4")
+    assert m.scan(videos)["new"] == 1
+
+
 def test_reset_marks_pending(tmp_path):
     archive = tmp_path / "archive"
     archive.mkdir()
