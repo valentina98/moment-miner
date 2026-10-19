@@ -114,15 +114,26 @@ def index_pending(
     short_video_s: float = SHORT_VIDEO_S,
     long_video_s: float = LONG_VIDEO_S,
     folder=None,
+    failed: dict[str, str] | None = None,
     log=print,
 ) -> dict:
+    """`failed` maps the paths whose probe already failed in this run (the
+    ETA estimate's) to the error; they are marked failed without a second
+    wait on the same hung probe, and the next run retries them."""
     counts = {"indexed": 0, "errors": 0, "segments": 0}
     if caption_backend is not None:
         counts["captioned"] = 0
     if caption_backend is not None:
         caption_backend.preflight()
     settings = index_settings(backend.name, win, stride, frames_per_window)
-    videos = manifest.pending(settings, folder)
+    failed = failed or {}
+    videos = []
+    for row in manifest.pending(settings, folder):
+        if row["path"] in failed:
+            manifest.mark_error(row["path"], failed[row["path"]])
+            counts["errors"] += 1
+        else:
+            videos.append(row)
     for i, row in enumerate(videos, 1):
         vid, path = row["id"], row["path"]
         t_start = time.time()

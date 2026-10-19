@@ -162,21 +162,24 @@ class Manifest:
     def pending(
         self, settings: dict | None = None, folder: str | Path | None = None
     ) -> list[sqlite3.Row]:
-        """Videos needing work: new, changed, or indexed under other settings.
+        """Videos needing work: new, changed, failed last time, or indexed
+        under other settings.
 
         `settings` is what the caller is about to index with; a done video
         whose recorded row differs comes back too, so a geometry change
-        re-indexes without `--reindex`. Omit it and only new/changed videos
-        come back, which is what a caller that is not about to index wants.
-        Errored videos stay out either way -- they need `--reindex`, the same
-        as before. `folder` limits the answer to videos under it, so indexing
-        one folder never touches another.
+        re-indexes without `--reindex`. Omit it and only new, changed and
+        failed videos come back, which is what a caller that is not about to
+        index wants. A failed video comes back on every run, so retrying it
+        never needs `--reindex`, which would redo the whole folder. `folder`
+        limits the answer to videos under it, so indexing one folder never
+        touches another.
         """
         prefix = None if folder is None else _prefix(folder)
         if settings is None:
             return [
                 row for row in self.conn.execute(
-                    "SELECT * FROM videos WHERE status = 'pending' ORDER BY path")
+                    "SELECT * FROM videos WHERE status IN ('pending', 'error')"
+                    " ORDER BY path")
                 if prefix is None or row["path"].startswith(prefix)
             ]
         recorded = {
@@ -186,16 +189,17 @@ class Manifest:
         return [
             row
             for row in self.conn.execute(
-                "SELECT * FROM videos WHERE status IN ('pending', 'done')"
-                " ORDER BY path"
+                "SELECT * FROM videos ORDER BY path"
             )
             if (prefix is None or row["path"].startswith(prefix))
-            and (row["status"] == "pending"
+            and (row["status"] != "done"
                  or not _settings_match(recorded.get(row["path"]), settings))
         ]
 
     def why_pending(self, row: sqlite3.Row, settings: dict) -> str:
         """Why `pending(settings)` returned `row`, for the index log."""
+        if row["status"] == "error":
+            return f"failed last time ({row['error']})"
         if row["status"] == "pending":
             return "new or changed file"
         recorded = self.recorded_settings(row["path"])

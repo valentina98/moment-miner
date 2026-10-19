@@ -1,11 +1,11 @@
 import json
 import os
-import subprocess
 from collections import defaultdict
 from pathlib import Path
 
 import click
 
+from . import ffbin
 from .ffbin import ffmpeg_exe
 from .guard import writable
 from .hostpaths import on_host
@@ -79,17 +79,24 @@ def export_clip(
     # video+audio only if copying everything fails. `-y` only lets the
     # second try replace the first one's failed file: the name was free.
     errors = []
-    for mapping in (["-map", "0", "-ignore_unknown"], ["-map", "0:v", "-map", "0:a?"]):
-        result = subprocess.run(
-            [ffmpeg_exe(), "-y", "-v", "error", "-ss", f"{start:.3f}", "-i", path,
-             "-t", f"{end - start:.3f}", *mapping, "-c", "copy",
-             "-avoid_negative_ts", "make_zero", out],
-            capture_output=True, text=True,
-        )
-        if result.returncode == 0 and os.path.isfile(out) and os.path.getsize(out) > 1024:
-            return out, start, end
-        errors.append(result.stderr.strip())
-    raise RuntimeError("ffmpeg export failed: " + " | ".join(errors))
+    try:
+        for mapping in (["-map", "0", "-ignore_unknown"], ["-map", "0:v", "-map", "0:a?"]):
+            result = ffbin.run_while_growing(
+                [ffmpeg_exe(), "-y", "-v", "error", "-ss", f"{start:.3f}", "-i", path,
+                 "-t", f"{end - start:.3f}", *mapping, "-c", "copy",
+                 "-avoid_negative_ts", "make_zero", out],
+                out, text=True,
+            )
+            if result.returncode == 0 and os.path.isfile(out) and os.path.getsize(out) > 1024:
+                return out, start, end
+            errors.append(result.stderr.strip())
+        raise RuntimeError("ffmpeg export failed: " + " | ".join(errors))
+    except BaseException:
+        # A failed or killed copy leaves a truncated clip that looks like a
+        # result. The name was free when the copy began, so the file is ours.
+        if os.path.exists(out):
+            os.remove(out)
+        raise
 
 
 def smart_cut(path: str, start: float, end: float, out: str) -> tuple[str, float, float]:

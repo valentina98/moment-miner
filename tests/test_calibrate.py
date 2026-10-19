@@ -18,6 +18,6 @@ def test_calibration_is_stored_per_machine_and_backend(tmp_path, synthetic_video
 def test_estimate_counts_segments_the_indexer_would_cut(monkeypatch):
     import moment_miner.calibrate as cal
     monkeypatch.setattr(cal, "probe", lambda path: {"duration": {"a": 24.0, "b": 4.0}[path]})
-    segments, seconds, eta = estimate(
+    segments, seconds, eta, failed = estimate(
         [{"path": "a"}, {"path": "b"}], {"s_per_segment": 10.0}, win=8.0, stride=4.0)
-    assert (segments, seconds, eta) == (5 + 1, 28.0, 60.0)
+    assert (segments, seconds, eta, failed) == (5 + 1, 28.0, 60.0, {})

@@ -1,0 +1,188 @@
+import shutil
+import time
+
+import pytest
+
+from moment_miner import ffbin, frames, probe
+
+from .conftest import requires_ffmpeg
+
+
+def _fake(tmp_path, name, real):
+    """A stand-in binary that never returns for a file named hang.mp4."""
+    exe = tmp_path / name
+    exe.write_text(
+        "#!/bin/sh\n"
+        'case "$*" in */hang.mp4*) exec sleep 60;; esac\n'
+        f'exec {real} "$@"\n')
+    exe.chmod(0o755)
+    return str(exe)
+
+
+def test_run_kills_a_call_that_never_returns(monkeypatch):
+    monkeypatch.setattr(ffbin, "TIMEOUT_S", 0.5)
+    t = time.monotonic()
+    with pytest.raises(ffbin.FFmpegTimeout, match="sleep gave no result"):
+        ffbin.run(["sleep", "60"])
+    assert time.monotonic() - t < 5
+
+
+def test_a_stalled_stream_raises_instead_of_ending_quietly(tmp_path, monkeypatch):
+    monkeypatch.setattr(ffbin, "TIMEOUT_S", 0.5)
+    fake = _fake(tmp_path, "ffmpeg", "false")
+    monkeypatch.setattr(frames, "ffmpeg_exe", lambda: fake)
+    with pytest.raises(ffbin.FFmpegTimeout, match="no frame"):
+        list(frames._stream_frames(str(tmp_path / "hang.mp4"), 1.0, 16, 16))
+
+
+@requires_ffmpeg
+def test_a_slow_consumer_is_not_a_stall(synthetic_video, monkeypatch):
+    monkeypatch.setattr(ffbin, "TIMEOUT_S", 0.5)
+    got = 0
+    for _ in frames._stream_frames(str(synthetic_video), 1.0, 32, 32):
+        got += 1
+        if got <= 2:
+            time.sleep(1.0)
+    assert got >= 9
+
+
+@requires_ffmpeg
+def test_a_hanging_file_is_marked_failed_and_the_run_completes(
+        tmp_path, synthetic_video, monkeypatch):
+    from moment_miner.embeddings.mock import MockBackend
+    from moment_miner.indexer import index_pending
+    from moment_miner.manifest import Manifest
+    from moment_miner.store import SegmentStore
+
+    shutil.copy(synthetic_video, synthetic_video.parent / "hang.mp4")
+    monkeypatch.setattr(ffbin, "TIMEOUT_S", 1.0)
+    fake_probe = _fake(tmp_path, "ffprobe", shutil.which("ffprobe"))
+    fake_mpeg = _fake(tmp_path, "ffmpeg", shutil.which("ffmpeg"))
+    monkeypatch.setattr(probe, "ffprobe_exe", lambda: fake_probe)
+    monkeypatch.setattr(frames, "ffmpeg_exe", lambda: fake_mpeg)
+    manifest = Manifest(tmp_path / "data" / "manifest.db")
+    manifest.scan(synthetic_video.parent)
+
+    t = time.monotonic()
+    counts = index_pending(manifest, SegmentStore(tmp_path / "data", "mock"),
+                           MockBackend(), use_asr=False, log=lambda *a: None)
+
+    # The fake sleeps 60 s; without the timeout the run waits it out.
+    assert time.monotonic() - t < 30
+
+    assert counts["indexed"] == 1 and counts["errors"] == 1
+    [failed] = manifest.errors()
+    assert failed["path"].endswith("hang.mp4")
+    assert "FFmpegTimeout" in failed["error"]
+
+
+def _hangs(*a, **k):
+    raise ffbin.FFmpegTimeout("ffmpeg gave no result in 300 s")
+
+
+def test_a_timeout_on_an_off_grid_span_fails_the_file(monkeypatch):
+    monkeypatch.setattr(frames, "extract_frames", _hangs)
+    # Shorter than the window, so the span is decoded on its own, not streamed.
+    with pytest.raises(ffbin.FFmpegTimeout):
+        list(frames.extract_windows("tail.mp4", [(0.0, 3.0)], n=4, win=8.0))
+
+
+def test_a_calibration_timeout_drops_the_estimate_not_the_run(monkeypatch, capsys):
+    from moment_miner import calibrate, cli
+
+    monkeypatch.setattr(calibrate, "load_rate", lambda *a: None)
+    monkeypatch.setattr(calibrate, "calibrate", _hangs)
+    backend = type("Backend", (), {"name": "mock"})()
+    assert cli._estimate("data", backend, [{"path": "hang.mp4"}], 4.0, 2.0,
+                         False) == (None, {})
+    assert "estimate: unavailable" in capsys.readouterr().out
+
+
+def test_a_call_still_writing_is_not_killed(tmp_path, monkeypatch):
+    monkeypatch.setattr(ffbin, "TIMEOUT_S", 0.5)
+    out = tmp_path / "out.bin"
+    result = ffbin.run_while_growing(
+        ["sh", "-c", f"for i in 1 2 3 4 5 6 7 8 9 10; do echo x >> {out}; sleep 0.2; done"],
+        out, text=True)
+    assert result.returncode == 0
+    assert out.read_text().count("x") == 10
+
+
+def test_a_call_that_stops_writing_is_killed(tmp_path, monkeypatch):
+    monkeypatch.setattr(ffbin, "TIMEOUT_S", 0.5)
+    out = tmp_path / "out.bin"
+    t = time.monotonic()
+    with pytest.raises(ffbin.FFmpegTimeout, match="wrote nothing"):
+        ffbin.run_while_growing(["sh", "-c", f"echo x > {out}; exec sleep 60"], out)
+    assert time.monotonic() - t < 5
+
+
+@requires_ffmpeg
+def test_a_killed_stream_copy_leaves_no_partial_clip(tmp_path, synthetic_video, monkeypatch):
+    from moment_miner import export
+
+    fake = tmp_path / "ffmpeg"
+    fake.write_text('#!/bin/sh\nfor a; do last=$a; done\nprintf partial > "$last"\nexec sleep 60\n')
+    fake.chmod(0o755)
+    monkeypatch.setattr(ffbin, "TIMEOUT_S", 0.5)
+    monkeypatch.setattr(export, "ffmpeg_exe", lambda: str(fake))
+    out = tmp_path / "clip.mp4"
+    with pytest.raises(ffbin.FFmpegTimeout):
+        export.export_clip(str(synthetic_video), 1.0, 3.0, str(out), smart=False)
+    assert not out.exists()
+
+
+def test_the_estimate_hands_a_file_it_cannot_probe_to_the_index_pass(
+        tmp_path, monkeypatch, capsys):
+    from moment_miner import calibrate, cli
+    from moment_miner.manifest import Manifest
+
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    for name in ("ok.mp4", "hang.mp4"):
+        (archive / name).write_bytes(name.encode() * 1000)
+    manifest = Manifest(tmp_path / "data" / "manifest.db")
+    manifest.scan(archive)
+
+    def probe(path):
+        if path.endswith("hang.mp4"):
+            raise ffbin.FFmpegTimeout("ffprobe gave no result in 300 s")
+        return {"duration": 8.0}
+
+    monkeypatch.setattr(calibrate, "load_rate", lambda *a: {"s_per_segment": 1.0})
+    monkeypatch.setattr(calibrate, "probe", probe)
+    backend = type("Backend", (), {"name": "mock"})()
+    eta, failed = cli._estimate("data", backend, manifest.pending(), 4.0, 2.0, False)
+    assert eta is not None
+    assert list(failed) == [str(archive / "hang.mp4")]
+    assert "FFmpegTimeout" in failed[str(archive / "hang.mp4")]
+    assert "could not be probed, skipped this run" in capsys.readouterr().out
+
+
+@requires_ffmpeg
+def test_a_file_the_estimate_failed_is_not_probed_again_and_the_next_run_retries_it(
+        tmp_path, synthetic_video, monkeypatch):
+    from moment_miner import indexer
+    from moment_miner.embeddings.mock import MockBackend
+    from moment_miner.manifest import Manifest
+    from moment_miner.store import SegmentStore
+
+    shutil.copy(synthetic_video, synthetic_video.parent / "hang.mp4")
+    manifest = Manifest(tmp_path / "data" / "manifest.db")
+    manifest.scan(synthetic_video.parent)
+    [hang] = [r["path"] for r in manifest.pending() if r["path"].endswith("hang.mp4")]
+    store = SegmentStore(tmp_path / "data", "mock")
+    probed = []
+    real_probe = indexer.probe
+    monkeypatch.setattr(indexer, "probe", lambda p: probed.append(p) or real_probe(p))
+
+    counts = indexer.index_pending(
+        manifest, store, MockBackend(), use_asr=False,
+        failed={hang: "FFmpegTimeout: ffprobe gave no result in 300 s"}, log=lambda *a: None)
+    assert counts["indexed"] == 1 and counts["errors"] == 1
+    assert hang not in probed
+    assert [r["path"] for r in manifest.errors()] == [hang]
+
+    again = indexer.index_pending(manifest, store, MockBackend(), use_asr=False,
+                                  log=lambda *a: None)
+    assert again["indexed"] == 1 and manifest.errors() == []
