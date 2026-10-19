@@ -20,8 +20,8 @@ from .timefmt import fmt_ts, parse_ts
 @click.version_option(package_name="moment-miner", prog_name="mm")
 @click.option("--data-dir", default="~/.mm_data", show_default=True,
               help="Where everything the tool keeps lives: the index, the "
-                   "caption cache, labels and exported clips (cuts/). Never "
-                   "inside a footage folder.")
+                   "caption cache, labels and exported clips (cuts/). Any "
+                   "folder works, a footage folder included.")
 @click.pass_context
 def main(ctx, data_dir):
     """Moment Miner: search large video archives, export lossless clips."""
@@ -569,8 +569,9 @@ def _template_names() -> list[str]:
 def annotate(data_dir, folder, template_name, labels_path):
     """Interactively append ground-truth labels for videos in FOLDER.
 
-    Labels go to the data folder, never beside the footage, which is only
-    read. Watch the video in any player, then enter the times here.
+    Labels go to DATA_DIR/labels.csv unless --labels names another file;
+    the videos are only read. Watch the video in any player, then enter the
+    times here.
     """
     from .manifest import VIDEO_EXTS
 
