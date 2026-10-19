@@ -129,7 +129,7 @@ Boundary GOPs are recoded at `NEAR_LOSSLESS` (CRF 3). Verify start accuracy by p
 
 `--no-smart` remains available and is the faster, fully byte-identical path when a keyframe-aligned start is good enough.
 
-**Dependency note:** smartcut is an optional extra (`pip install -e ".[smartcut]"`, pinned to `1.7`). The package was deprecated in February 2026 but is MIT, pure Python, and depends only on PyAV; if a future PyAV breaks it, vendoring the four modules used here is the escape hatch. Core `mm index` / `mm search` never pull it in.
+**Dependency note:** smartcut is an optional extra (`pip install -e ".[smartcut]"`, pinned to `1.7`). The package was deprecated in February 2026 but is MIT, pure Python, and depends on PyAV, numpy and tqdm; if a future PyAV breaks it, vendoring the five modules used here (1,836 lines) is the escape hatch. Core `mm index` / `mm search` never pull it in.
 
 ## Finding the cut: `mm locate`
 
