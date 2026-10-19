@@ -177,16 +177,17 @@ def test_frames_dir_matches_only_its_own_segment(tmp_path):
     assert len(load_frames(stills, "s0")) == 1
 
 
-def test_page_defaults_next_to_the_footage(tmp_path):
+def test_page_defaults_to_the_data_folder_not_the_footage(tmp_path):
     archive = tmp_path / "archive"
     archive.mkdir()
     for n in (1, 2):
         write_captions(tmp_path / f"m{n}.csv", sidecar(6, lambda i: f"caption {n} {i}"))
     result = CliRunner().invoke(main, [
+        "--data-dir", str(tmp_path / "data"),
         "caption-compare", str(tmp_path / "m1.csv"), str(tmp_path / "m2.csv"),
         "--videos", str(archive),
     ])
     assert result.exit_code == 0, result.output
-    assert (archive / "caption-comparison.html").exists()
-    assert (archive / "caption-comparison-key.csv").exists()
-    assert not (tmp_path / "caption-comparison.html").exists()
+    assert (tmp_path / "data" / "caption-comparison.html").exists()
+    assert (tmp_path / "data" / "caption-comparison-key.csv").exists()
+    assert not any(archive.iterdir())

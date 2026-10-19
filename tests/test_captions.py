@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from moment_miner.captions import (
-    CaptionSidecar,
+    CaptionCache,
     even_points,
     frames_for_duration,
     sample_points,
@@ -21,6 +21,7 @@ from moment_miner.captions import (
     LIGHTS,
     joined,
     load_prompt,
+    open_captions,
     parse_axes,
     prompt_names,
 )
@@ -231,52 +232,79 @@ def test_backend_selection():
         get_caption_backend("gpt-4")
 
 
-# --- the sidecar beside the footage ---------------------------------------
+# --- the caption cache in the data folder ----------------------------------
 
-def test_sidecar_writes_next_to_the_video(tmp_path):
+def test_cache_lives_in_the_data_folder_keyed_by_video_id(tmp_path):
     video = tmp_path / "clips" / "a.mp4"
     video.parent.mkdir()
-    sc = CaptionSidecar(video)
+    sc = open_captions(tmp_path / "data", video, "a")
     sc.put("a:0.0", 0.0, 8.0, parse_axes("a caption"), "claude-haiku-4-5")
     sc.flush()
-    written = video.parent / "captions.csv"
-    assert written.exists()
+    written = tmp_path / "data" / "captions" / "a.csv"
     rows = list(csv.DictReader(written.open()))
     assert rows[0]["id"] == "a:0.0"
     assert rows[0]["action"] == "a caption"
     assert rows[0]["caption"] == "a caption, unclear, unclear, unclear"
     assert rows[0]["model"] == "claude-haiku-4-5"
+    assert list(video.parent.iterdir()) == []
 
 
-def test_sidecar_is_read_back_so_captions_are_not_bought_twice(tmp_path):
+def test_cache_is_read_back_so_captions_are_not_bought_twice(tmp_path):
     video = tmp_path / "a.mp4"
-    sc = CaptionSidecar(video)
+    sc = open_captions(tmp_path / "data", video, "a")
     sc.put("a:0.0", 0.0, 8.0, parse_axes("cached"), "claude-haiku-4-5")
     sc.flush()
-    assert CaptionSidecar(video).get("a:0.0")["action"] == "cached"
-    assert CaptionSidecar(video).get("a:4.0") is None
+    assert open_captions(tmp_path / "data", video, "a").get("a:0.0")["action"] == "cached"
+    assert open_captions(tmp_path / "data", video, "a").get("a:4.0") is None
+
+
+def test_captions_beside_the_footage_are_copied_in_and_left_alone(tmp_path):
+    video = tmp_path / "clips" / "a.mp4"
+    video.parent.mkdir()
+    old = CaptionCache(video.parent / "captions.csv")
+    old.put("a:0.0", 0.0, 8.0, parse_axes("bought earlier"), "m")
+    old.put("b:0.0", 0.0, 8.0, parse_axes("another video"), "m")
+    old.flush()
+    before = (video.parent / "captions.csv").read_bytes()
+
+    sc = open_captions(tmp_path / "data", video, "a")
+    assert sc.get("a:0.0")["action"] == "bought earlier"
+    assert sc.get("b:0.0") is None
+    sc.flush()
+    assert (video.parent / "captions.csv").read_bytes() == before
+    copied = list(csv.DictReader((tmp_path / "data" / "captions" / "a.csv").open()))
+    assert [r["id"] for r in copied] == ["a:0.0"]
+
+
+def test_rows_written_before_the_axes_existed_still_vote(tmp_path):
+    path = tmp_path / "captions.csv"
+    path.write_text("id,t0,t1,caption,model,written\n"
+                    "a:0.0,0.0,8.0,man vaulting a ledge in a park,m,2026-09-18\n")
+    sc = CaptionCache(path)
+    sc.vote()
+    assert sc.get("a:0.0")["action"] == "man vaulting a ledge in a park"
 
 
 def test_caption_dir_override(tmp_path):
     video = tmp_path / "a.mp4"
     out = tmp_path / "elsewhere"
-    sc = CaptionSidecar(video, caption_dir=out)
+    sc = open_captions(tmp_path / "data", video, "a", caption_dir=out)
     sc.put("a:0.0", 0.0, 8.0, parse_axes("c"), "m")
     sc.flush()
     assert (out / "captions.csv").exists()
-    assert not (tmp_path / "captions.csv").exists()
+    assert not (tmp_path / "data").exists()
 
 
 def test_check_writable_fails_before_spending(tmp_path, monkeypatch):
     """Tests run as root in the container, where a 0o500 dir is no barrier —
     so raise the OSError a read-only mount would raise."""
-    sc = CaptionSidecar(tmp_path / "a.mp4")
+    sc = CaptionCache(tmp_path / "captions.csv")
 
     def read_only(*a, **k):
         raise OSError("Read-only file system")
 
     monkeypatch.setattr(Path, "mkdir", read_only)
-    with pytest.raises(RuntimeError, match="read-only"):
+    with pytest.raises(RuntimeError, match="cannot write captions"):
         sc.check_writable()
 
 
@@ -308,7 +336,7 @@ def test_indexer_appends_caption_to_the_transcript_text(tmp_path, monkeypatch):
 
     store = S()
     counts = indexer.index_pending(
-        M(), store, E(), use_asr=False,
+        M(), store, E(), use_asr=False, data_dir=tmp_path / "data",
         caption_backend=MockCaptionBackend(), log=lambda *a: None,
     )
     assert counts["captioned"] == len(store.rows)
@@ -371,7 +399,7 @@ class Recording(MockCaptionBackend):
 
 class Refuses(MockCaptionBackend):
     def caption(self, *a, **k):
-        raise AssertionError("bought a caption the sidecar already had")
+        raise AssertionError("bought a caption the cache already had")
 
 
 def _indexed(tmp_path, synthetic_video):
@@ -398,7 +426,7 @@ def test_caption_pass_over_an_existing_index(tmp_path, synthetic_video):
 
     be = Recording()
     counts = caption_indexed(manifest, store, be, synthetic_video.parent,
-                             frame_w=200, frame_h=120, log=lambda *a: None)
+                             frame_w=200, frame_h=120, data_dir=tmp_path / "data", log=lambda *a: None)
 
     assert counts["captioned"] == len(before) == 2
     rows = store.table.search().limit(100).to_list()
@@ -406,8 +434,9 @@ def test_caption_pass_over_an_existing_index(tmp_path, synthetic_video):
                for r in rows)
     assert {r["id"]: list(map(float, r["vector"])) for r in rows} == before
     assert {h["id"] for h in store.text_search("kong")} == set(before)
-    sidecar = CaptionSidecar(synthetic_video)
-    assert all(sidecar.get(i)["action"] == "kong vault over a rail" for i in before)
+    vid = next(iter(before)).split(":")[0]
+    cache = open_captions(tmp_path / "data", synthetic_video, vid)
+    assert all(cache.get(i)["action"] == "kong vault over a rail" for i in before)
 
 
 @requires_ffmpeg
@@ -418,26 +447,26 @@ def test_caption_pass_decodes_at_its_own_raster(tmp_path, synthetic_video):
     manifest, store = _indexed(tmp_path, synthetic_video)
     be = Recording()
     caption_indexed(manifest, store, be, synthetic_video.parent,
-                    frame_w=200, frame_h=120, log=lambda *a: None)
+                    frame_w=200, frame_h=120, data_dir=tmp_path / "data", log=lambda *a: None)
     assert (120, 200) != (FRAME_H, FRAME_W)
     # 8 s windows at stride 4 take two stills each, at 2 s and 6 s.
     assert be.shapes == [(2, 120, 200, 3)] * 2
 
 
 @requires_ffmpeg
-def test_caption_pass_skips_segments_the_sidecar_has(tmp_path, synthetic_video):
+def test_caption_pass_skips_segments_the_cache_has(tmp_path, synthetic_video):
     from moment_miner.indexer import caption_indexed
 
     manifest, store = _indexed(tmp_path, synthetic_video)
     caption_indexed(manifest, store, Recording(), synthetic_video.parent,
-                    log=lambda *a: None)
+                    data_dir=tmp_path / "data", log=lambda *a: None)
     counts = caption_indexed(manifest, store, Refuses(), synthetic_video.parent,
-                             log=lambda *a: None)
+                             data_dir=tmp_path / "data", log=lambda *a: None)
     assert counts["captioned"] == 0 and counts["reused"] == 2
 
     forced = Recording("backflip off a wall")
     counts = caption_indexed(manifest, store, forced, synthetic_video.parent,
-                             force=True, log=lambda *a: None)
+                             force=True, data_dir=tmp_path / "data", log=lambda *a: None)
     assert counts["captioned"] == 2 and len(forced.shapes) == 2
     assert len(store.text_search("backflip")) == 2
     assert store.text_search("kong") == []
@@ -501,7 +530,7 @@ def test_prompt_comments_are_not_sent_to_the_model():
 
 
 def test_clip_level_axes_are_voted_over_the_clip(tmp_path):
-    sc = CaptionSidecar(tmp_path / "a.mp4")
+    sc = CaptionCache(tmp_path / "captions.csv")
     for i, (scene, light) in enumerate(
             [("a park", "sunny"), ("a park", "sunny"), ("a park", "overcast")]):
         sc.put(f"vid:{i}.0", float(i), float(i) + 8,
@@ -515,7 +544,7 @@ def test_clip_level_axes_are_voted_over_the_clip(tmp_path):
 
 
 def test_an_abstention_never_wins_the_vote(tmp_path):
-    sc = CaptionSidecar(tmp_path / "b.mp4")
+    sc = CaptionCache(tmp_path / "captions.csv")
     for i, light in enumerate(["unclear", "unclear", "night"]):
         sc.put(f"v:{i}.0", float(i), float(i) + 8,
                {"action": "x", "who": "nobody", "scene": "s", "light": light}, "mock")
