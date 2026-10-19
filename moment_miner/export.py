@@ -1,21 +1,28 @@
 import json
 import os
+import re
 from collections import defaultdict
 from pathlib import Path
 
 import click
+import json5
 
 from . import ffbin
 from .ffbin import ffmpeg_exe
-from .guard import writable
-from .hostpaths import on_host
+from .guard import WriteRefused, writable
+from .hostpaths import in_container, on_host
 from .probe import keyframe_before, probe
 
 
 class NameTaken(click.ClickException):
     def __init__(self, path: str):
-        super().__init__(f"not written: {path} already exists")
+        super().__init__(f"not written: {on_host(path)} already exists")
         self.path = path
+
+
+def slug(text: str) -> str:
+    """`kong vault?` -> `kong-vault`, safe in a file name on every system."""
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:40] or "query"
 
 
 def _lc_time(seconds: float) -> str:
@@ -31,27 +38,16 @@ def clip_name(path: str | Path, start: float, end: float, prefix: str = "") -> s
     return f"{prefix}{video.stem}-{_lc_time(start)}-{_lc_time(end)}{video.suffix}"
 
 
-def cut_span(path: str, t0: float, t1: float, pad: float = 1.0, snap: bool = True,
-             smart: bool = True) -> tuple[float, float]:
-    duration = probe(path)["duration"]
-    start = max(0.0, t0 - pad)
-    end = min(duration, t1 + pad)
-    if snap and not smart:
-        start = keyframe_before(path, start)
-    return start, end
-
-
 def export_clip(
     path: str,
-    t0: float,
-    t1: float,
+    start: float,
+    end: float,
     out: str,
-    pad: float = 1.0,
-    snap: bool = True,
     smart: bool = True,
     prefix: str = "",
 ) -> tuple[str, float, float]:
-    """Export [t0, t1] as a clip. Returns (out, actual_t0, actual_t1).
+    """Cut [start, end] of `path` into a clip, exactly; no margin is added.
+    Returns (out, actual_start, actual_end).
 
     `out` is the file to create, or a folder to create it in under
     `prefix` + `clip_name`. An existing file is never replaced: NameTaken.
@@ -61,12 +57,13 @@ def export_clip(
     bit-identically.
 
     smart=False falls back to a pure stream copy, which cannot start
-    anywhere but a keyframe: with snap=True the start moves back to the
-    previous keyframe, so the file is byte-identical to the source but
-    may begin up to one GOP early. Use it when the extra footage does not
-    matter and speed does, or where the smartcut extra is unavailable.
+    anywhere but a keyframe: the start moves back to the previous keyframe,
+    so the file is byte-identical to the source but may begin up to one GOP
+    early. Use it when the extra footage does not matter and speed does, or
+    where the smartcut extra is unavailable.
     """
-    start, end = cut_span(path, t0, t1, pad, snap, smart)
+    if not smart:
+        start = keyframe_before(path, start)
     if Path(out).is_dir():
         out = str(Path(out) / clip_name(path, start, end, prefix))
     if Path(out).exists():
@@ -149,9 +146,11 @@ def smart_cut(path: str, start: float, end: float, out: str) -> tuple[str, float
 
 
 def write_llc_projects(hits: list[dict], out_dir: str | Path,
-                       label: str = "") -> tuple[list[str], list[str]]:
-    """One LosslessCut project (.llc, JSON) per video, hits as cut segments.
-    Returns (written, taken): a project whose file already exists is skipped.
+                       query: str = "") -> tuple[list[str], list[str]]:
+    """One LosslessCut project per video, `<video>-<query>.llc`, its hits as
+    cut segments, in rank order of the list given. The spans are written as
+    given, so what LosslessCut shows is what `mm cut` cuts. Returns
+    (written, taken): a project whose file already exists is skipped.
 
     LosslessCut resolves media as path.join(dirname(project), mediaFileName)
     with no sanitization, so mediaFileName is the relative path from out_dir
@@ -169,21 +168,78 @@ def write_llc_projects(hits: list[dict], out_dir: str | Path,
     for path, video_hits in by_video.items():
         video = Path(path)
         project = {
-            "version": 1,
+            "version": 2,
             "mediaFileName": os.path.relpath(on_host(path), on_host(target_dir)),
             "cutSegments": [
-                {"start": h["t0"], "end": h["t1"], "name": f"{label}? #{rank}"}
+                {"start": h["t0"], "end": h["t1"], "name": f"{query}? #{rank}"}
                 for rank, h in sorted(video_hits, key=lambda rh: rh[1]["t0"])
             ],
         }
-        out = target_dir / f"{video.stem}.llc"
+        name = f"{video.stem}-{slug(query)}"
+        out = target_dir / f"{name}.llc"
         n = 1
         while str(out) in written:
             n += 1
-            out = target_dir / f"{video.stem}_{n}.llc"
+            out = target_dir / f"{name}_{n}.llc"
         if out.exists():
             taken.append(str(out))
             continue
         out.write_text(json.dumps(project, indent=2))
         written.append(str(out))
     return written, taken
+
+
+RANK = re.compile(r"#(\d+)\s*$")
+
+
+def read_project(project: str | Path) -> tuple[str, list[tuple[float, float | None, str]]]:
+    """A LosslessCut project's video and its segments as (start, end, name).
+
+    LosslessCut saves JSON5 and drops an end that runs to the video's end;
+    segments it would not export (`selected: false`) are left out here too.
+    The video is resolved the way LosslessCut does, from the project's folder
+    on the host, then mapped back into the container.
+    """
+    data = json5.loads(Path(project).read_text())
+    if not data.get("mediaFileName"):
+        raise click.ClickException(f"{on_host(project)}: names no video (mediaFileName)")
+    video = in_container(os.path.normpath(
+        os.path.join(os.path.dirname(on_host(project)), data["mediaFileName"])))
+    segments = [(float(s.get("start", 0.0)), s.get("end"), s.get("name", ""))
+                for s in data.get("cutSegments", []) if s.get("selected", True)]
+    return video, segments
+
+
+def cut_project(project: str | Path, out_dir: str | Path, smart: bool = True):
+    """Cut every segment of a project into `out_dir`, exactly as it is.
+
+    A segment whose name ends in a rank (`kong vault? #2`) gets it in front,
+    `02_<video>-<from>-<to><ext>`, so a folder sorts best match first. A
+    taken name or a failed cut is recorded and the next segment still runs.
+    Returns (written, taken, failed): written as (clip, video, start, end).
+    """
+    video, segments = read_project(project)
+    if not os.path.isfile(video):
+        raise click.ClickException(
+            f"{on_host(project)}: its video {on_host(video)} is not there")
+    duration = probe(video)["duration"]
+    target = writable(out_dir)
+    target.mkdir(parents=True, exist_ok=True)
+    written, taken, failed = [], [], []
+    for start, end, name in segments:
+        end = duration if end is None else min(float(end), duration)
+        rank = RANK.search(name)
+        prefix = f"{int(rank.group(1)):02d}_" if rank else ""
+        try:
+            if end <= start:
+                raise ValueError(f"segment ends at {end:.3f} s, before its start")
+            out, a0, a1 = export_clip(video, start, end, str(target), smart=smart,
+                                      prefix=prefix)
+            written.append((out, video, a0, a1))
+        except NameTaken as e:
+            taken.append(e.path)
+        except WriteRefused:
+            raise
+        except Exception as e:
+            failed.append(f"{on_host(video)} {start:.3f}-{end:.3f}: {e}")
+    return written, taken, failed

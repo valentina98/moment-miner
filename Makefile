@@ -2,7 +2,12 @@ IMAGE   ?= moment-miner
 VIDEOS  ?= examples
 Q        ?= kong vault
 K        ?= 10
-OUT      ?= clips
+# Where `search` writes its projects and `cut` its clips, any host folder, a
+# footage folder included [default: DATA/cuts/<name>_<time>/].
+OUT      ?=
+# The .llc project `cut` cuts: a host path under DATA, VIDEOS or OUT, the
+# folders the container sees. Its video must be under VIDEOS.
+PROJECT  ?=
 # Both take a docker volume name or an absolute host path, so an index and the
 # model weights can live on the drive that holds the footage. Both are host
 # folders by default: labels, clips and .llc projects are opened from DATA, and
@@ -10,8 +15,9 @@ OUT      ?= clips
 DATA     ?= $(HOME)/.mm_data
 CACHE    ?= $(HOME)/.cache/moment-miner
 SUB      ?= .
-# SUB is the folder under VIDEOS to index. `eval` scores DATA/labels.csv, where
-# `make annotate` writes; LABELS names another file under VIDEOS, or /data/...
+# SUB is the folder under VIDEOS a command works on (a video, for `calibrate`).
+# LABELS is the labels file `annotate` writes and `eval` scores, a host path under
+# DATA or VIDEOS [default: DATA/labels.csv].
 LABELS   ?=
 # One prompt per line. Relative to the repo, not to VIDEOS, which often points
 # at an external drive.
@@ -19,12 +25,13 @@ PROMPTS  ?= prompts.txt
 AXIS     ?= action
 RANKER   ?= mock
 ARGS     ?=
-# LLC=1: `search` also writes LosslessCut projects, into DATA/cuts/<query>_<time>/.
-LLC      ?=
-# Host paths let those projects name their video from the host, and let the tool
-# see that an OUT inside VIDEOS is the same place, so it never indexes its own
-# clips. Only a DATA that is a host folder has a host path.
-HOST_PATHS = -e MM_HOST_PATHS="/videos=$(abspath $(VIDEOS));/out=$(abspath $(OUT))$(if $(filter /%,$(DATA)),;/data=$(DATA),)"
+# Host paths let the tool print and take the paths you use, let projects name
+# their video from the host, and let the tool see that an OUT inside VIDEOS is
+# the same place, so it never indexes its own clips. Only a DATA that is a host
+# folder has a host path.
+HOST_PATHS = -e MM_HOST_PATHS="/videos=$(abspath $(VIDEOS))$(if $(OUT),;/out=$(abspath $(OUT)),)$(if $(filter /%,$(DATA)),;/data=$(DATA),)"
+OUT_OPT = $(if $(OUT),-o $(abspath $(OUT)),)
+LABELS_OPT = $(if $(LABELS),--labels $(abspath $(LABELS)),)
 TEMPLATE ?= parkour
 PORT     ?= 7700
 CAPTION_MODEL ?= claude-haiku-4-5
@@ -32,7 +39,7 @@ CAPTION_MODEL ?= claude-haiku-4-5
 CAPTION_PROMPT ?= general
 GPUS     ?=
 
-# The subscription token reaches only `caption` and `recaption`, and never as
+# The subscription token reaches only `caption`, and never as
 # the credentials file itself: that file also holds refresh tokens and every MCP
 # server's OAuth token. The host copies the one value resolve_credentials()
 # reads, claudeAiOauth.accessToken, into a private temp file (or `{}` when there
@@ -48,13 +55,14 @@ TOKEN_MOUNT = -v "$$tok":/tmp/.claude/.credentials.json:ro
 # so what lands in DATA and OUT is yours rather than root's; that user has no
 # home in the image, hence HOME=/tmp and the cache at /cache. A host folder is
 # created first, or docker would create it owned by root.
-RUN_NO_KEYS = $(if $(filter /%,$(DATA) $(CACHE)),mkdir -p $(filter /%,$(DATA) $(CACHE)) &&,) \
+RUN_NO_KEYS = $(if $(filter /%,$(DATA) $(CACHE) $(abspath $(OUT))),mkdir -p $(filter /%,$(DATA) $(CACHE) $(abspath $(OUT))) &&,) \
 	docker run --rm $(GPUS) \
 	--user $(shell id -u):$(shell id -g) -e HOME=/tmp -e XDG_CACHE_HOME=/cache \
 	$(HOST_PATHS) \
 	-v $(abspath $(VIDEOS)):/videos:ro \
 	-v $(CACHE):/cache \
-	-v $(DATA):/data
+	-v $(DATA):/data \
+	$(if $(OUT),-v $(abspath $(OUT)):/out,)
 # Keys come from .env when it exists, so a fresh checkout needs no exports;
 # docker lets an exported variable of the same name win over the file.
 RUN = $(RUN_NO_KEYS) \
@@ -62,7 +70,7 @@ RUN = $(RUN_NO_KEYS) \
 	-e ANTHROPIC_API_KEY \
 	-e TYPESAFE_API_KEY
 
-.PHONY: image dev-image test calibrate index caption recaption search mine annotate eval probe serve shell
+.PHONY: image dev-image test calibrate index caption search cut annotate eval status probe serve shell
 
 image:
 	docker build --target runtime -t $(IMAGE) .
@@ -73,40 +81,42 @@ dev-image:
 test: dev-image
 	docker run --rm $(IMAGE):dev
 
+# Each target runs the mm command of the same name; ARGS adds options to any of them.
 # Measures this machine once on 24 s of SUB (a video), so `index` can print an ETA; index runs it itself when missing.
 calibrate: image
-	$(RUN) $(IMAGE) calibrate /videos/$(SUB) $(ARGS)
+	$(RUN_NO_KEYS) $(IMAGE) calibrate /videos/$(SUB) $(ARGS)
 
 index: image
-	$(RUN) $(IMAGE) index /videos/$(SUB) $(ARGS)
+	$(RUN_NO_KEYS) $(IMAGE) index /videos/$(SUB) $(ARGS)
 
+# Captions an index that already exists; the only target that can spend.
 caption: image
-	$(TOKEN_FILE) $(RUN) $(TOKEN_MOUNT) $(IMAGE) index /videos/$(SUB) --caption $(CAPTION_MODEL) --caption-prompt $(CAPTION_PROMPT) $(ARGS)
-
-# Captions an index that already exists, without re-embedding it.
-recaption: image
 	$(TOKEN_FILE) $(RUN) $(TOKEN_MOUNT) $(IMAGE) caption /videos/$(SUB) --model $(CAPTION_MODEL) --caption-prompt $(CAPTION_PROMPT) $(ARGS)
 
 search: image
-	$(RUN) $(IMAGE) search "$(Q)" -k $(K) $(if $(LLC),--llc,)
+	$(RUN_NO_KEYS) $(IMAGE) search "$(Q)" -k $(K) $(OUT_OPT) $(ARGS)
 
-mine: image
-	mkdir -p $(OUT)
-	$(RUN) -v $(abspath $(OUT)):/out $(IMAGE) mine "$(Q)" /videos/$(SUB) -o /out -k $(K)
+cut: image
+	@test -n "$(PROJECT)" || { echo "name the project: make cut PROJECT=<path to a .llc file>"; exit 1; }
+	$(RUN_NO_KEYS) $(IMAGE) cut "$(abspath $(PROJECT))" $(OUT_OPT) $(ARGS)
 
-# Interactive; labels go to DATA/labels.csv.
+# Interactive.
 annotate: image
-	$(RUN_NO_KEYS) -it $(IMAGE) annotate /videos --template $(TEMPLATE)
+	$(RUN_NO_KEYS) -it $(IMAGE) annotate /videos/$(SUB) --template $(TEMPLATE) $(LABELS_OPT) $(ARGS)
 
 eval: image
-	$(RUN_NO_KEYS) $(IMAGE) eval $(if $(LABELS),$(if $(filter /data/%,$(LABELS)),$(LABELS),/videos/$(LABELS)),)
+	$(RUN_NO_KEYS) $(IMAGE) eval $(LABELS_OPT) $(ARGS)
 
+status: image
+	$(RUN_NO_KEYS) $(IMAGE) status $(ARGS)
+
+# Keys only for the hosted ranker.
 probe: image
 	@test -f "$(PROMPTS)" || { echo "no prompts file at $(PROMPTS) -- write one, or pass PROMPTS=<path>"; exit 1; }
-	$(RUN) -v $(abspath $(PROMPTS)):/prompts.txt:ro $(IMAGE) probe /prompts.txt --axis $(AXIS) --ranker $(RANKER) -k $(K) $(ARGS)
+	$(if $(filter jev,$(RANKER)),$(RUN),$(RUN_NO_KEYS)) $(IMAGE) probe "$(abspath $(PROMPTS))" --axis $(AXIS) --ranker $(RANKER) -k $(K) $(ARGS)
 
 serve: image
-	$(RUN) -p $(PORT):$(PORT) $(IMAGE) serve --host 0.0.0.0 --port $(PORT)
+	$(RUN_NO_KEYS) -p $(PORT):$(PORT) $(IMAGE) serve --host 0.0.0.0 --port $(PORT) $(ARGS)
 
 shell: dev-image
 	$(RUN) -it --entrypoint bash $(IMAGE):dev
