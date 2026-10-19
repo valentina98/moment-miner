@@ -103,9 +103,6 @@ class Manifest:
                 continue
             if on_host(p) in exported:
                 continue
-            # Older versions of `mm mine` exported into *_mined folders.
-            if any(part.endswith("_mined") for part in p.parent.parts):
-                continue
             seen.add(str(p))
             st = p.stat()
             row = self.conn.execute(

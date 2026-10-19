@@ -414,29 +414,15 @@ class CaptionCache:
     is kept apart from the index: re-indexing, a model change or a deleted
     index never touches it. Same columns as the `captions.csv` that
     `mm probe --captions` and `mm caption-compare` read.
-
-    `legacy` is a `captions.csv` that older versions wrote beside the footage.
-    Its rows for `video_id` are read once and copied in on the next flush; the
-    file itself is never written.
     """
 
-    def __init__(self, path: str | Path, legacy: str | Path | None = None,
-                 video_id: str | None = None):
+    def __init__(self, path: str | Path):
         self.path = Path(path)
         self.rows: dict[str, dict] = {}
         self._dirty = False
         if self.path.exists():
             with self.path.open(newline="") as f:
                 self.rows = {r["id"]: r for r in csv.DictReader(f)}
-        elif legacy is not None and Path(legacy).exists():
-            with Path(legacy).open(newline="") as f:
-                self.rows = {r["id"]: r for r in csv.DictReader(f)
-                             if r["id"].split(":")[0] == video_id}
-            self._dirty = bool(self.rows)
-        for row in self.rows.values():
-            # Rows written before the axes existed carry only the joined caption.
-            if not row.get("action"):
-                row.update(parse_axes(row["caption"]))
 
     def get(self, seg_id: str) -> dict[str, str] | None:
         row = self.rows.get(seg_id)
@@ -490,7 +476,7 @@ class CaptionCache:
         self._dirty = False
 
 
-def open_captions(data_dir: str | Path, video_path: str | Path, video_id: str,
+def open_captions(data_dir: str | Path, video_id: str,
                   caption_dir: str | Path | None = None) -> CaptionCache:
     """The cache for one video: `<data-dir>/captions/<video id>.csv`.
 
@@ -501,6 +487,4 @@ def open_captions(data_dir: str | Path, video_path: str | Path, video_id: str,
     """
     if caption_dir:
         return CaptionCache(Path(caption_dir) / SIDECAR_NAME)
-    return CaptionCache(Path(data_dir) / "captions" / f"{video_id}.csv",
-                        legacy=Path(video_path).parent / SIDECAR_NAME,
-                        video_id=video_id)
+    return CaptionCache(Path(data_dir) / "captions" / f"{video_id}.csv")

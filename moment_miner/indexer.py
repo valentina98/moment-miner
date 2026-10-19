@@ -152,7 +152,7 @@ def index_pending(
                 long=caption_frames_long, short_video_s=short_video_s,
                 long_video_s=long_video_s)
             if caption_backend is not None:
-                cache = open_captions(data_dir, path, vid, caption_dir)
+                cache = open_captions(data_dir, vid, caption_dir)
                 cache.check_writable()
             rows, motion_rows = [], []
             unreadable = 0
@@ -287,7 +287,7 @@ def caption_indexed(
             max(r["t1"] for r in rows), short=caption_frames_short,
             normal=caption_frames, long=caption_frames_long,
             short_video_s=short_video_s, long_video_s=long_video_s)
-        cache = open_captions(data_dir, path, rows[0]["video_id"], caption_dir)
+        cache = open_captions(data_dir, rows[0]["video_id"], caption_dir)
         cache.check_writable()
         try:
             for r in sorted(rows, key=lambda r: r["t0"]):
