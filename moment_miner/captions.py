@@ -23,6 +23,8 @@ from pathlib import Path
 
 import numpy as np
 
+from .guard import writable
+
 # Frames are sampled evenly across the whole window, in time order, so the
 # model can say what changes rather than describe one instant.
 #
@@ -405,36 +407,42 @@ SIDECAR_NAME = "captions.csv"
 SIDECAR_COLUMNS = ["id", "t0", "t1", *AXES, "caption", "model", "written"]
 
 
-class CaptionSidecar:
-    """Captions on disk beside the footage they describe.
+class CaptionCache:
+    """Captions on disk, read back so a segment is never bought twice.
 
-    `<folder>/captions.csv`, the same place and shape as the `labels.csv` that
-    `mm eval` reads — but captions are machine-written indexed content and
-    labels are human-checked ground truth, so they stay separate files.
+    A caption spends session quota (money, on the API-key route), so the cache
+    is kept apart from the index: re-indexing, a model change or a deleted
+    index never touches it. Same columns as the `captions.csv` that
+    `mm probe --captions` and `mm caption-compare` read.
 
-    A caption spends session quota (money, on the API-key route) and an index
-    does not survive a deleted mm_data volume, so captions are written next to
-    the video and read back on the next pass: re-indexing the same folder
-    re-uses them instead of spending for them again.
+    `legacy` is a `captions.csv` that older versions wrote beside the footage.
+    Its rows for `video_id` are read once and copied in on the next flush; the
+    file itself is never written.
     """
 
-    def __init__(self, video_path: str | Path, caption_dir: str | Path | None = None):
-        base = Path(caption_dir) if caption_dir else Path(video_path).parent
-        self.path = base / SIDECAR_NAME
+    def __init__(self, path: str | Path, legacy: str | Path | None = None,
+                 video_id: str | None = None):
+        self.path = Path(path)
         self.rows: dict[str, dict] = {}
+        self._dirty = False
         if self.path.exists():
             with self.path.open(newline="") as f:
                 self.rows = {r["id"]: r for r in csv.DictReader(f)}
-        self._dirty = False
+        elif legacy is not None and Path(legacy).exists():
+            with Path(legacy).open(newline="") as f:
+                self.rows = {r["id"]: r for r in csv.DictReader(f)
+                             if r["id"].split(":")[0] == video_id}
+            self._dirty = bool(self.rows)
+        for row in self.rows.values():
+            # Rows written before the axes existed carry only the joined caption.
+            if not row.get("action"):
+                row.update(parse_axes(row["caption"]))
 
     def get(self, seg_id: str) -> dict[str, str] | None:
         row = self.rows.get(seg_id)
         if not row:
             return None
-        if row.get("action"):
-            return {a: row[a] for a in AXES}
-        # Rows written before the axes existed carry only the joined caption.
-        return parse_axes(row["caption"])
+        return {a: row[a] for a in AXES}
 
     def put(self, seg_id: str, t0: float, t1: float, axes: dict[str, str],
             model: str) -> None:
@@ -446,11 +454,8 @@ class CaptionSidecar:
         self._dirty = True
 
     def check_writable(self) -> None:
-        """Fail before the first caption request, not after.
-
-        The Makefile mounts the archive read-only, which is right for every
-        other command and wrong for this one — `make caption` mounts it rw.
-        """
+        """Fail before the first caption request, not after."""
+        writable(self.path)
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             probe = self.path.parent / ".write-test"
@@ -458,10 +463,7 @@ class CaptionSidecar:
             probe.unlink()
         except OSError as e:
             raise RuntimeError(
-                f"cannot write captions beside the footage ({self.path.parent}): {e}. "
-                "The archive is mounted read-only — use `make caption`, which mounts "
-                "it read-write, or pass --caption-dir."
-            ) from e
+                f"cannot write captions to {self.path.parent}: {e}") from e
 
     def vote(self) -> None:
         """Collapse the clip-level axes, per video, over the rows held here."""
@@ -479,10 +481,26 @@ class CaptionSidecar:
     def flush(self) -> None:
         if not self._dirty:
             return
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        writable(self.path).parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=SIDECAR_COLUMNS)
             w.writeheader()
             for row in sorted(self.rows.values(), key=lambda r: float(r["t0"])):
                 w.writerow(row)
         self._dirty = False
+
+
+def open_captions(data_dir: str | Path, video_path: str | Path, video_id: str,
+                  caption_dir: str | Path | None = None) -> CaptionCache:
+    """The cache for one video: `<data-dir>/captions/<video id>.csv`.
+
+    Keyed by the content fingerprint, not the path, so the same file reached
+    through another mount or after a rename finds its captions. `caption_dir`
+    names a separate caption set instead (one `captions.csv` for every video),
+    for comparing prompts or models against each other.
+    """
+    if caption_dir:
+        return CaptionCache(Path(caption_dir) / SIDECAR_NAME)
+    return CaptionCache(Path(data_dir) / "captions" / f"{video_id}.csv",
+                        legacy=Path(video_path).parent / SIDECAR_NAME,
+                        video_id=video_id)

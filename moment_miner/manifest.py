@@ -4,6 +4,9 @@ import sqlite3
 import time
 from pathlib import Path
 
+from .guard import writable
+from .hostpaths import on_host
+
 VIDEO_EXTS = {
     ".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".mts", ".m2ts",
     ".wmv", ".flv", ".ts", ".3gp", ".mpg", ".mpeg",
@@ -39,6 +42,9 @@ CREATE TABLE IF NOT EXISTS index_settings (
     backend TEXT NOT NULL,
     indexed_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS exports (
+    path TEXT PRIMARY KEY
+);
 """
 
 # Every one of these feeds the segment geometry, and segment ids are
@@ -72,10 +78,16 @@ def fingerprint(path: str, chunk: int = 1 << 20) -> str:
 
 class Manifest:
     def __init__(self, db_path: str | Path):
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        writable(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(db_path))
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(_SCHEMA)
+
+    def add_export(self, path: str | Path) -> None:
+        """A clip the tool wrote: `scan` never indexes it, wherever it sits."""
+        with self.conn:
+            self.conn.execute("INSERT OR IGNORE INTO exports (path) VALUES (?)",
+                              (on_host(Path(path).resolve()),))
 
     def scan(self, folder: str | Path) -> dict:
         """Register new/changed videos under folder. Returns counts.
@@ -84,11 +96,14 @@ class Manifest:
         caller decides whether to `forget` them.
         """
         counts = {"new": 0, "changed": 0, "unchanged": 0}
+        exported = {r[0] for r in self.conn.execute("SELECT path FROM exports")}
         seen = set()
         for p in sorted(Path(folder).resolve().rglob("*")):
             if not p.is_file() or p.suffix.lower() not in VIDEO_EXTS:
                 continue
-            # `mm mine` exports into *_mined folders; never re-ingest them.
+            if on_host(p) in exported:
+                continue
+            # Older versions of `mm mine` exported into *_mined folders.
             if any(part.endswith("_mined") for part in p.parent.parts):
                 continue
             seen.add(str(p))

@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 
 from .ffbin import ffmpeg_exe
+from .guard import writable
 from .indexer import index_pending, windows
 from .manifest import Manifest
 from .probe import probe
@@ -64,7 +65,8 @@ def load_rate(data_dir, backend_name: str) -> dict | None:
 
 def calibrate(data_dir, backend, video, log=print, seconds: float = SAMPLE_S) -> dict:
     """Index the first `seconds` of `video` with `backend`; store s/segment."""
-    with tempfile.TemporaryDirectory() as tmp:
+    writable(data_dir).mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=data_dir) as tmp:
         folder = Path(tmp) / "sample"
         folder.mkdir()
         sample = folder / f"sample{Path(video).suffix}"
@@ -94,7 +96,7 @@ def calibrate(data_dir, backend, video, log=print, seconds: float = SAMPLE_S) ->
     except (OSError, ValueError):
         entries = {}
     entries[f"{machine_key()} / {backend.name}"] = entry
-    path.parent.mkdir(parents=True, exist_ok=True)
+    writable(path).parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(entries, indent=2) + "\n")
     log(f"calibrated: {entry['s_per_segment']} s per segment "
         f"({machine_key()}, {backend.name}, {entry['sample']})")

@@ -10,16 +10,21 @@ OUT      ?= clips
 DATA     ?= $(HOME)/.mm_data
 CACHE    ?= $(HOME)/.cache/moment-miner
 SUB      ?= .
-# Both are paths under VIDEOS: SUB is the folder to index, LABELS the eval set.
-# Ground truth lives beside the footage, so `eval` wants VIDEOS=footage while
-# `index` wants VIDEOS=footage/src.
-LABELS   ?= labels.csv
+# SUB is the folder under VIDEOS to index. `eval` scores DATA/labels.csv, where
+# `make annotate` writes; LABELS names another file under VIDEOS, or /data/...
+LABELS   ?=
 # One prompt per line. Relative to the repo, not to VIDEOS, which often points
 # at an external drive.
 PROMPTS  ?= prompts.txt
 AXIS     ?= action
 RANKER   ?= mock
 ARGS     ?=
+# LLC=1: `search` also writes LosslessCut projects, into DATA/cuts/<query>_<time>/.
+LLC      ?=
+# Host paths let those projects name their video from the host, and let the tool
+# see that an OUT inside VIDEOS is the same place, so it never indexes its own
+# clips. Only a DATA that is a host folder has a host path.
+HOST_PATHS = -e MM_HOST_PATHS="/videos=$(abspath $(VIDEOS));/out=$(abspath $(OUT))$(if $(filter /%,$(DATA)),;/data=$(DATA),)"
 TEMPLATE ?= parkour
 PORT     ?= 7700
 CAPTION_MODEL ?= claude-haiku-4-5
@@ -39,24 +44,23 @@ TOKEN_FILE = tok=$$(mktemp) && trap 'rm -f "$$tok"' EXIT && trap 'exit 130' INT 
 	"$(CLAUDE_CREDS)" > "$$tok" &&
 TOKEN_MOUNT = -v "$$tok":/tmp/.claude/.credentials.json:ro
 
-# Keys come from .env when it exists, so a fresh checkout needs no exports;
-# docker lets an exported variable of the same name win over the file.
-# Runs as you, so what lands in DATA and OUT is yours rather than root's; that
-# user has no home in the image, hence HOME=/tmp and the cache at /cache. A host
-# folder is created first, or docker would create it owned by root.
-RUN = $(if $(filter /%,$(DATA) $(CACHE)),mkdir -p $(filter /%,$(DATA) $(CACHE)) &&,) \
+# For targets that call no hosted model, so they never hold a key. Runs as you,
+# so what lands in DATA and OUT is yours rather than root's; that user has no
+# home in the image, hence HOME=/tmp and the cache at /cache. A host folder is
+# created first, or docker would create it owned by root.
+RUN_NO_KEYS = $(if $(filter /%,$(DATA) $(CACHE)),mkdir -p $(filter /%,$(DATA) $(CACHE)) &&,) \
 	docker run --rm $(GPUS) \
 	--user $(shell id -u):$(shell id -g) -e HOME=/tmp -e XDG_CACHE_HOME=/cache \
-	$(if $(wildcard .env),--env-file .env,) \
-	-e ANTHROPIC_API_KEY \
-	-e TYPESAFE_API_KEY \
+	$(HOST_PATHS) \
 	-v $(abspath $(VIDEOS)):/videos:ro \
 	-v $(CACHE):/cache \
 	-v $(DATA):/data
-
-# Captions are cached beside the footage, so this one target mounts the archive
-# read-write. Everything else keeps :ro.
-RUN_RW = $(subst :ro,,$(RUN))
+# Keys come from .env when it exists, so a fresh checkout needs no exports;
+# docker lets an exported variable of the same name win over the file.
+RUN = $(RUN_NO_KEYS) \
+	$(if $(wildcard .env),--env-file .env,) \
+	-e ANTHROPIC_API_KEY \
+	-e TYPESAFE_API_KEY
 
 .PHONY: image dev-image test calibrate index caption recaption search mine annotate eval probe serve shell
 
@@ -77,28 +81,25 @@ index: image
 	$(RUN) $(IMAGE) index /videos/$(SUB) $(ARGS)
 
 caption: image
-	$(TOKEN_FILE) $(RUN_RW) $(TOKEN_MOUNT) $(IMAGE) index /videos/$(SUB) --caption $(CAPTION_MODEL) --caption-prompt $(CAPTION_PROMPT) $(ARGS)
+	$(TOKEN_FILE) $(RUN) $(TOKEN_MOUNT) $(IMAGE) index /videos/$(SUB) --caption $(CAPTION_MODEL) --caption-prompt $(CAPTION_PROMPT) $(ARGS)
 
 # Captions an index that already exists, without re-embedding it.
 recaption: image
-	$(TOKEN_FILE) $(RUN_RW) $(TOKEN_MOUNT) $(IMAGE) caption /videos/$(SUB) --model $(CAPTION_MODEL) --caption-prompt $(CAPTION_PROMPT) $(ARGS)
+	$(TOKEN_FILE) $(RUN) $(TOKEN_MOUNT) $(IMAGE) caption /videos/$(SUB) --model $(CAPTION_MODEL) --caption-prompt $(CAPTION_PROMPT) $(ARGS)
 
 search: image
-	$(RUN) $(IMAGE) search "$(Q)" -k $(K) --llc-dir /data/llc
+	$(RUN) $(IMAGE) search "$(Q)" -k $(K) $(if $(LLC),--llc,)
 
 mine: image
 	mkdir -p $(OUT)
 	$(RUN) -v $(abspath $(OUT)):/out $(IMAGE) mine "$(Q)" /videos/$(SUB) -o /out -k $(K)
 
-# interactive; footage mounted writable because labels.csv lives with it
+# Interactive; labels go to DATA/labels.csv.
 annotate: image
-	docker run --rm -it \
-		-v $(abspath $(VIDEOS)):/videos \
-		-v $(CACHE):/root/.cache -v $(DATA):/data \
-		$(IMAGE) annotate /videos --template $(TEMPLATE)
+	$(RUN_NO_KEYS) -it $(IMAGE) annotate /videos --template $(TEMPLATE)
 
 eval: image
-	$(RUN) $(IMAGE) eval /videos/$(LABELS)
+	$(RUN_NO_KEYS) $(IMAGE) eval $(if $(LABELS),$(if $(filter /data/%,$(LABELS)),$(LABELS),/videos/$(LABELS)),)
 
 probe: image
 	@test -f "$(PROMPTS)" || { echo "no prompts file at $(PROMPTS) -- write one, or pass PROMPTS=<path>"; exit 1; }
