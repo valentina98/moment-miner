@@ -11,6 +11,7 @@ from . import ffbin
 from .ffbin import ffmpeg_exe
 from .guard import WriteRefused, writable
 from .hostpaths import in_container, on_host
+from .manifest import PARTIAL
 from .probe import keyframe_before, probe
 
 
@@ -69,34 +70,43 @@ def export_clip(
     if Path(out).exists():
         raise NameTaken(out)
     writable(out)
-    if smart:
-        return smart_cut(path, start, end, out)
+    # Written under a hidden name and renamed once complete, so a crash, a
+    # kill or Ctrl+C never leaves a truncated clip that looks like a result.
+    part = str(Path(out).with_name(PARTIAL + Path(out).name))
+    try:
+        if smart:
+            smart_cut(path, start, end, part)
+        else:
+            _stream_copy(path, start, end, part)
+        if Path(out).exists():
+            raise NameTaken(out)
+        os.rename(part, out)
+    finally:
+        if os.path.exists(part):
+            os.remove(part)
+    return out, start, end
+
+
+def _stream_copy(path: str, start: float, end: float, out: str) -> None:
     # Camera files may carry data streams (e.g. Canon timed metadata,
     # codec "none") that cannot be muxed back into MP4; fall back to
     # video+audio only if copying everything fails. `-y` only lets the
-    # second try replace the first one's failed file: the name was free.
+    # second try replace the first one's failed file.
     errors = []
-    try:
-        for mapping in (["-map", "0", "-ignore_unknown"], ["-map", "0:v", "-map", "0:a?"]):
-            result = ffbin.run_while_growing(
-                [ffmpeg_exe(), "-y", "-v", "error", "-ss", f"{start:.3f}", "-i", path,
-                 "-t", f"{end - start:.3f}", *mapping, "-c", "copy",
-                 "-avoid_negative_ts", "make_zero", out],
-                out, text=True,
-            )
-            if result.returncode == 0 and os.path.isfile(out) and os.path.getsize(out) > 1024:
-                return out, start, end
-            errors.append(result.stderr.strip())
-        raise RuntimeError("ffmpeg export failed: " + " | ".join(errors))
-    except BaseException:
-        # A failed or killed copy leaves a truncated clip that looks like a
-        # result. The name was free when the copy began, so the file is ours.
-        if os.path.exists(out):
-            os.remove(out)
-        raise
+    for mapping in (["-map", "0", "-ignore_unknown"], ["-map", "0:v", "-map", "0:a?"]):
+        result = ffbin.run_while_growing(
+            [ffmpeg_exe(), "-y", "-v", "error", "-ss", f"{start:.3f}", "-i", path,
+             "-t", f"{end - start:.3f}", *mapping, "-c", "copy",
+             "-avoid_negative_ts", "make_zero", out],
+            out, text=True,
+        )
+        if result.returncode == 0 and os.path.isfile(out) and os.path.getsize(out) > 1024:
+            return
+        errors.append(result.stderr.strip())
+    raise RuntimeError("ffmpeg export failed: " + " | ".join(errors))
 
 
-def smart_cut(path: str, start: float, end: float, out: str) -> tuple[str, float, float]:
+def smart_cut(path: str, start: float, end: float, out: str) -> None:
     """Frame-accurate export via the `smartcut` package (optional extra).
 
     Stream copy can only begin on a keyframe, so a plain copy snaps
@@ -142,7 +152,6 @@ def smart_cut(path: str, start: float, end: float, out: str) -> tuple[str, float
         container.close()
     if failure is not None:
         raise RuntimeError(f"smart cut failed: {failure}") from failure
-    return out, start, end
 
 
 def write_llc_projects(hits: list[dict], out_dir: str | Path,
