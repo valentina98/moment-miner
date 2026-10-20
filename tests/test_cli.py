@@ -1,4 +1,5 @@
 import csv
+import json
 
 from click.testing import CliRunner
 
@@ -52,10 +53,11 @@ def test_annotate_appends_to_a_labels_file_without_a_category_column(tmp_path):
 def test_help_command():
     runner = CliRunner()
     top = runner.invoke(main, ["help"])
-    assert top.exit_code == 0 and "mine" in top.output and "annotate" in top.output
+    assert top.exit_code == 0 and "cut" in top.output and "annotate" in top.output
+    assert {"mine", "export"}.isdisjoint(main.list_commands(None))
 
-    sub = runner.invoke(main, ["help", "mine"])
-    assert sub.exit_code == 0 and "mm mine" in sub.output and "-k" in sub.output
+    sub = runner.invoke(main, ["help", "search"])
+    assert sub.exit_code == 0 and "mm search" in sub.output and "-k" in sub.output
 
     bad = runner.invoke(main, ["help", "nope"])
     assert bad.exit_code != 0 and "unknown command" in bad.output
@@ -78,64 +80,135 @@ def test_annotate_unknown_template(tmp_path):
     assert "unknown template" in result.output
 
 
-@requires_ffmpeg
-def test_mine_end_to_end(tmp_path, synthetic_video):
+def _mm(data_dir, *args):
+    return CliRunner().invoke(main, ["--data-dir", str(data_dir), *args])
+
+
+def _indexed(tmp_path, synthetic_video):
     data_dir = tmp_path / "mm_data"
-    out_dir = tmp_path / "clips"
-    result = CliRunner().invoke(main, [
-        "--data-dir", str(data_dir),
-        "mine", "test pattern", str(synthetic_video.parent),
-        "-o", str(out_dir), "-k", "2", "--backend", "mock", "--no-asr",
-    ])
+    result = _mm(data_dir, "index", str(synthetic_video.parent), "--backend", "mock",
+                 "--no-asr", "--no-estimate")
     assert result.exit_code == 0, result.output
-    assert "indexing 1 new/changed video(s)" in result.output
-    clips = list(out_dir.glob("*.mp4"))
-    assert len(clips) >= 1
-    assert clips[0].stat().st_size > 1024
-
-    # second run: nothing re-indexed, still exports
-    result = CliRunner().invoke(main, [
-        "--data-dir", str(data_dir),
-        "mine", "test pattern", str(synthetic_video.parent),
-        "-o", str(tmp_path / "clips2"), "-k", "1", "--backend", "mock", "--no-asr",
-    ])
-    assert result.exit_code == 0, result.output
-    assert "indexing" not in result.output
+    return data_dir
 
 
 @requires_ffmpeg
-def test_mine_reindex_keeps_the_stored_captions(tmp_path, synthetic_video):
+def test_search_writes_a_project_per_video_and_cut_cuts_them(tmp_path, synthetic_video):
+    import subprocess
+
+    import json5
+
+    # Two videos: search merges overlapping hits, so one 10 s video gives one.
+    # Not a copy: a video's id comes from its bytes.
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+                    "testsrc2=duration=10:size=320x240:rate=15", "-c:v", "libx264",
+                    "-preset", "ultrafast", str(synthetic_video.with_name("other.mp4"))],
+                   check=True)
+    data_dir = _indexed(tmp_path, synthetic_video)
+    found = _mm(data_dir, "search", "test pattern", "-k", "2", "--backend", "mock",
+                "-o", str(tmp_path / "projects"))
+    assert found.exit_code == 0, found.output
+    projects = sorted((tmp_path / "projects").iterdir())
+    assert [p.name for p in projects] == ["other-test-pattern.llc",
+                                          "test_video-test-pattern.llc"]
+    assert all(f"project: {p}" in found.output for p in projects)
+    names = [s["name"] for p in projects for s in json5.loads(p.read_text())["cutSegments"]]
+    assert sorted(names) == ["test pattern? #1", "test pattern? #2"]
+
+    cut = _mm(data_dir, "cut", *map(str, projects), "-o", str(tmp_path / "clips"))
+    assert cut.exit_code == 0, cut.output
+    clips = sorted(p.name for p in (tmp_path / "clips").iterdir())
+    assert [c[:3] for c in clips] == ["01_", "02_"]
+    assert all(c.endswith(".mp4") for c in clips)
+    assert f"<- {synthetic_video}" in cut.output
+
+
+@requires_ffmpeg
+def test_search_widens_each_hit_by_pad_inside_the_video(tmp_path, synthetic_video):
+    data_dir = _indexed(tmp_path, synthetic_video)
+
+    def hits(pad):
+        result = _mm(data_dir, "search", "test pattern", "-k", "5", "--backend", "mock",
+                     "--json", "--pad", str(pad), "-o", str(tmp_path / f"pad{pad}"))
+        assert result.exit_code == 0, result.output
+        return sorted((h["t0"], h["t1"]) for h in json.loads(result.stdout))
+
+    from moment_miner.probe import probe
+
+    duration = probe(str(synthetic_video))["duration"]
+    exact, padded = hits(0), hits(1)
+    assert any(t0 < 1 or t1 + 1 > duration for t0, t1 in exact), "no end to clamp"
+    assert padded == [(max(0.0, t0 - 1), min(duration, t1 + 1)) for t0, t1 in exact]
+
+
+@requires_ffmpeg
+def test_cut_without_output_writes_a_run_folder_named_after_the_project(tmp_path,
+                                                                       synthetic_video):
+    data_dir = _indexed(tmp_path, synthetic_video)
+    assert _mm(data_dir, "search", "test pattern", "-k", "1", "--backend", "mock",
+               "-o", str(tmp_path / "p")).exit_code == 0
+    result = _mm(data_dir, "cut", str(tmp_path / "p" / "test_video-test-pattern.llc"))
+    assert result.exit_code == 0, result.output
+    [run] = (data_dir / "cuts").iterdir()
+    assert run.name.startswith("test_video-test-pattern_")
+    assert [p.name[:3] for p in run.iterdir()] == ["01_"]
+
+
+@requires_ffmpeg
+def test_search_without_output_writes_a_run_folder_named_after_the_query(tmp_path,
+                                                                        synthetic_video):
+    data_dir = _indexed(tmp_path, synthetic_video)
+    result = _mm(data_dir, "search", "Test pattern?", "-k", "1", "--backend", "mock")
+    assert result.exit_code == 0, result.output
+    [run] = (data_dir / "cuts").iterdir()
+    assert run.name.startswith("test-pattern_")
+    assert [p.name for p in run.iterdir()] == ["test_video-test-pattern.llc"]
+
+
+@requires_ffmpeg
+def test_a_reindex_keeps_the_stored_captions(tmp_path, synthetic_video):
     from moment_miner.manifest import Manifest
     from moment_miner.store import AxisStore, SegmentStore
 
-    data_dir = tmp_path / "mm_data"
-    args = ["--data-dir", str(data_dir), "mine", "test pattern", str(synthetic_video.parent),
-            "-o", str(tmp_path / "clips"), "-k", "1", "--backend", "mock", "--no-asr"]
-    assert CliRunner().invoke(main, args).exit_code == 0
+    data_dir = _indexed(tmp_path, synthetic_video)
     axes = {"action": "kong vault", "who": "one person", "scene": "park", "light": "sunny"}
     AxisStore(data_dir).add([{"id": s["id"], "path": s["path"], "t0": s["t0"], "t1": s["t1"], **axes}
                              for s in SegmentStore(data_dir, "mock").segments()])
     Manifest(data_dir / "manifest.db").reset(synthetic_video.parent)
 
-    args[args.index(str(tmp_path / "clips"))] = str(tmp_path / "clips2")
-    result = CliRunner().invoke(main, args)
+    result = _mm(data_dir, "index", str(synthetic_video.parent), "--backend", "mock",
+                 "--no-asr", "--no-estimate")
     assert result.exit_code == 0, result.output
-    assert "indexing 1 new/changed video(s)" in result.output
+    assert "indexed': 1" in result.output
     texts = {s["text"] for s in SegmentStore(data_dir, "mock").segments()}
     assert texts == {"kong vault, one person, park, sunny"}
 
 
-@requires_ffmpeg
-def test_mine_default_output_is_a_run_folder_under_cuts(tmp_path, synthetic_video):
-    result = CliRunner().invoke(main, [
-        "--data-dir", str(tmp_path / "mm_data"),
-        "mine", "test pattern", str(synthetic_video.parent),
-        "-k", "1", "--backend", "mock", "--no-asr",
-    ])
-    assert result.exit_code == 0, result.output
-    runs = list((tmp_path / "mm_data" / "cuts").iterdir())
-    assert len(runs) == 1 and runs[0].name.startswith("test-pattern_")
-    assert list(runs[0].glob("*.mp4"))
+# cli spec rule 2: one name per option. These are the names it replaced.
+RETIRED = {"--out", "--llc-dir", "--llc", "--top", "--caption"}
+WRITES_RESULTS = {"search", "cut", "caption-compare", "locate"}
+
+
+def test_every_option_has_one_name_for_one_thing():
+    import click
+
+    ctx = click.Context(main)
+    for name in main.list_commands(ctx):
+        cmd = main.get_command(ctx, name)
+        opts = {p.name: p.opts for p in cmd.params if isinstance(p, click.Option)}
+        used = {o for names in opts.values() for o in names}
+        assert not used & RETIRED, (name, used & RETIRED)
+        for param, names in opts.items():
+            if param == "output":
+                assert names == ["-o", "--output"], (name, names)
+            if param in ("k", "top_k"):
+                assert names == ["-k"], (name, names)
+            if "labels" in param:
+                assert names == ["--labels"], (name, names)
+        if name in WRITES_RESULTS:
+            assert opts.get("output") == ["-o", "--output"], name
+        else:
+            assert "output" not in opts, name
 
 
 def _two_indexed(tmp_path):

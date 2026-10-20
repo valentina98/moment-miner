@@ -35,6 +35,7 @@ def output(folder) -> None:
 
 def writable(path) -> Path:
     """`path`, unchanged, if the tool may write there; WriteRefused if not."""
+    from .hostpaths import on_host
     from .manifest import VIDEO_EXTS
 
     path = Path(path)
@@ -42,9 +43,9 @@ def writable(path) -> Path:
         return path
     p = path.expanduser().resolve()
     if p.suffix.lower() in VIDEO_EXTS and p.exists():
-        raise WriteRefused(f"refusing to write {p}: an existing video is never replaced.")
+        raise WriteRefused(f"refusing to write {on_host(p)}: an existing video is never replaced.")
     if not any(p.is_relative_to(r) for r in [_data, *_outputs]):
         raise WriteRefused(
-            f"refusing to write {p}: it is outside the data folder {_data} "
+            f"refusing to write {on_host(p)}: it is outside the data folder {on_host(_data)} "
             "and every output folder named to this command.")
     return path

@@ -4,8 +4,6 @@ from collections import defaultdict
 from pathlib import Path
 
 from .captions import (
-    DEFAULT_FRAMES,
-    DEFAULT_SHORT_FRAMES,
     LONG_VIDEO_S,
     SHORT_VIDEO_S,
     CaptionBackend,
@@ -17,6 +15,7 @@ from .captions import (
 from .embeddings.base import EmbeddingBackend
 from .frames import FRAME_H, FRAME_W, extract_stills, extract_windows
 from .guard import WriteRefused
+from .hostpaths import on_host
 from .manifest import Manifest
 from .motion import moving_fraction
 from .probe import probe
@@ -103,27 +102,18 @@ def index_pending(
     win: float = DEFAULT_WIN,
     stride: float = DEFAULT_STRIDE,
     frames_per_window: int = DEFAULT_FRAMES_PER_WINDOW,
-    caption_backend: CaptionBackend | None = None,
-    data_dir=None,
-    caption_dir=None,
     axis_store: AxisStore | None = None,
-    caption_frames: int | None = None,
-    caption_frames_short: int | None = None,
-    caption_frames_long: int | None = None,
-    short_video_s: float = SHORT_VIDEO_S,
-    long_video_s: float = LONG_VIDEO_S,
     folder=None,
     failed: dict[str, str] | None = None,
     log=print,
 ) -> dict:
-    """`failed` maps the paths whose probe already failed in this run (the
+    """Embed the pending videos. Captions come only from `caption_indexed`;
+    a re-embedded segment keeps the ones it had.
+
+    `failed` maps the paths whose probe already failed in this run (the
     ETA estimate's) to the error; they are marked failed without a second
     wait on the same hung probe, and the next run retries them."""
     counts = {"indexed": 0, "errors": 0, "segments": 0}
-    if caption_backend is not None:
-        counts["captioned"] = 0
-    if caption_backend is not None:
-        caption_backend.preflight()
     settings = index_settings(backend.name, win, stride, frames_per_window)
     failed = failed or {}
     videos = []
@@ -139,20 +129,12 @@ def index_pending(
         try:
             info = probe(path)
             duration = info["duration"]
-            log(f"[{i}/{len(videos)}] {path} ({duration:.0f}s): "
+            log(f"[{i}/{len(videos)}] {on_host(path)} ({duration:.0f}s): "
                 f"{manifest.why_pending(row, settings)}")
             if use_asr and info["has_audio"]:
                 from .asr import transcribe
 
                 manifest.add_transcript(vid, transcribe(path, model_size=asr_model))
-            cache = None
-            n_caption_frames = frames_for_duration(
-                duration, short=caption_frames_short, normal=caption_frames,
-                long=caption_frames_long, short_video_s=short_video_s,
-                long_video_s=long_video_s)
-            if caption_backend is not None:
-                cache = open_captions(data_dir, vid, caption_dir)
-                cache.check_writable()
             rows = []
             unreadable = 0
             spans = windows(duration, win, stride)
@@ -168,14 +150,6 @@ def index_pending(
                     continue
                 seg_id = f"{vid}:{t0:.1f}"
                 text = manifest.transcript_between(vid, t0, t1)
-                if cache is not None:
-                    axes = cache.get(seg_id)
-                    if axes is None:
-                        axes = caption_backend.caption(
-                            frames, t1 - t0, n_caption_frames, stride)
-                        cache.put(seg_id, t0, t1, axes, caption_backend.name)
-                        counts["captioned"] += 1
-                    text = f"{text} {joined(axes)}".strip()
                 rows.append({
                     "id": seg_id,
                     "video_id": vid,
@@ -191,25 +165,9 @@ def index_pending(
                 })
             if not rows:
                 raise RuntimeError(f"no readable windows ({unreadable} failed)")
-            if cache is not None:
-                cache.vote()
-                cache.flush()
-                axis_rows = []
-                for row in rows:
-                    voted = cache.get(row["id"])
-                    if voted is not None:
-                        spoken = manifest.transcript_between(
-                            row["video_id"], row["t0"], row["t1"])
-                        row["text"] = f"{spoken} {joined(voted)}".strip()
-                        axis_rows.append({"id": row["id"], "path": path,
-                                          "t0": row["t0"], "t1": row["t1"],
-                                          **voted})
-                if axis_store is not None:
-                    axis_store.delete_path(path)
-                    axis_store.add(axis_rows)
-            elif axis_store is not None:
-                # Re-embedding without a caption pass keeps the captions the
-                # segments already have; ids only survive an unchanged geometry.
+            if axis_store is not None:
+                # A re-embedded segment keeps the captions it had; ids only
+                # survive an unchanged geometry.
                 stored = axis_store.get([r["id"] for r in rows])
                 for row in rows:
                     if row["id"] in stored:
@@ -254,13 +212,12 @@ def caption_indexed(
 
     Captioning and embedding change on different cadences -- a new caption
     model, prompt or raster should not cost a re-index -- so this reads the
-    spans indexing recorded and decodes only the stills it sends. That also
-    frees the raster: `index --caption` can only show the model the 456x256
-    frames decoded for the embedding.
+    spans indexing recorded and decodes only the stills it sends, at a raster
+    of its own rather than the 456x256 frames decoded for the embedding.
 
     A segment with a cached caption is not bought again unless `force`; its
-    cached caption is still written into the row, so an index built without
-    --caption picks up captions bought earlier.
+    cached caption is still written into the row, so a fresh index picks up
+    captions bought earlier.
     """
     caption_backend.preflight()
     prefix = str(Path(folder).resolve()).rstrip(os.sep) + os.sep
@@ -270,7 +227,7 @@ def caption_indexed(
             by_path[r["path"]].append(r)
     counts = {"videos": 0, "captioned": 0, "reused": 0, "errors": 0}
     for i, (path, rows) in enumerate(sorted(by_path.items()), 1):
-        log(f"[{i}/{len(by_path)}] {path} ({len(rows)} segments)")
+        log(f"[{i}/{len(by_path)}] {on_host(path)} ({len(rows)} segments)")
         recorded = manifest.recorded_settings(path)
         stride = recorded["stride"] if recorded else DEFAULT_STRIDE
         per_window = (recorded["frames_per_window"] if recorded

@@ -12,8 +12,9 @@ Everything runs in Docker — no local Python or ffmpeg needed (only Docker and 
 make test                    # build the image + run the test suite
 make index VIDEOS=footage/src  # index a folder (first run downloads models
                              #   into ~/.cache/moment-miner, ~4 GB)
-make search Q="athlete performs a kong vault"
-make mine Q="kong vault" OUT=clips   # top matches as lossless clips in clips/
+make search Q="kong vault" OUT=clips  # ranked hits + one LosslessCut project
+                             #   per video in clips/
+make cut PROJECT=clips/<video>-kong-vault.llc  # its segments as lossless clips
 make shell                   # bash inside the container, mm on PATH
 ```
 
@@ -24,32 +25,28 @@ $ mm index /archive/parkour
 $ mm search "athlete performs a kong vault"
 /archive/parkour/video_001.mp4
   00:12:15 - 00:12:28  (score 0.0312)
-$ mm export /archive/parkour/video_001.mp4 00:12:15 00:12:28
-$ mm search "kong vault" --llc   # LosslessCut projects in
-                                 # ~/.mm_data/cuts/kong-vault_<timestamp>/:
-                                 # open, adjust cuts, export losslessly
-$ mm mine "kong vault" /archive/parkour -k 5
-                                 # one shot: index-if-needed → search → top-5
-                                 # lossless clips in
-                                 # ~/.mm_data/cuts/kong-vault_<timestamp>/
+project: ~/.mm_data/cuts/athlete-performs-a-kong-vault_<timestamp>/video_001-athlete-performs-a-kong-vault.llc
+$ mm cut ~/.mm_data/cuts/athlete-performs-a-kong-vault_<timestamp>/video_001-athlete-performs-a-kong-vault.llc
+                                 # every segment as a lossless clip, best match
+                                 # first: 01_video_001-00.12.15.000-00.12.28.000.mp4
+                                 # in ~/.mm_data/cuts/video_001-athlete-performs-a-kong-vault_<timestamp>/
 ```
 
-A `.llc` project names its video by a path relative to the project file, which is how LosslessCut resolves it, so open it where it was written.
+`mm search` cuts nothing. It prints the hits, each widened by `--pad` (1 s), and writes one LosslessCut project per video with those hits as segments. Open a project in LosslessCut to check or move the cuts, then cut it there or with `mm cut`, which cuts exactly what the project says and adds no margin. `mm cut` takes a project LosslessCut saved too. A `.llc` project names its video by a path relative to the project file, which is how LosslessCut resolves it, so open it where it was written.
 
 ## Commands
 
 | Command | Purpose |
 |---|---|
-| `mm index FOLDER` | scan recursively, index new, changed and previously failed videos under FOLDER and any whose segment geometry changed, drop videos no longer on disk; other folders are only reported, never touched; prints an ETA first (`--reindex`, `--no-asr`, `--backend`, `--caption`, `--no-estimate`) |
+| `mm index FOLDER` | scan recursively, index new, changed and previously failed videos under FOLDER and any whose segment geometry changed, drop videos no longer on disk; other folders are only reported, never touched; prints an ETA first; never captions (`--reindex`, `--no-asr`, `--backend`, `--no-estimate`) |
 | `mm calibrate VIDEO` | measure this machine's index speed on the first 24 s of VIDEO, for the ETA; `mm index` runs it by itself the first time. On a 4K 50 fps CPU box it reads 8–15% above the full-run rate, so the ETA errs long |
-| `mm search QUERY` | ranked timestamps (`-k`, `--json`, `--llc`, `--llc-dir`, `--static`/`--moving`, `--static-max`) |
-| `mm mine QUERY FOLDER` | index-if-needed → search → top-k clips (`-o`, `-k`, `--no-smart`) |
-| `mm locate -q Q -v VIDEO` | where inside one video the action is (`--labels`/`--videos` to sweep a CSV, `--fps`, `--locator`, `--duration`, `--top`, `-o`) |
+| `mm search QUERY` | ranked timestamps, each widened by `--pad`, and one LosslessCut project per video; cuts nothing (`-k`, `-o`, `--pad`, `--json`, `--static`/`--moving`, `--static-max`) |
+| `mm cut PROJECT.llc…` | every segment of each project as a lossless clip, exactly as the project says, from `mm search` or saved in LosslessCut; a failed or taken clip does not stop the rest (`-o`, `--no-smart`) |
+| `mm locate -q Q -v VIDEO` | where inside one video the action is (`--labels`/`--videos` to sweep a CSV, `--fps`, `--locator`, `--duration`, `-k`, `-o`) |
 | `mm annotate FOLDER` | interactive ground-truth labeling (`--template`) |
-| `mm eval [LABELS.csv]` | recall@k + MRR against hand labels (default `<data-dir>/labels.csv`) |
-| `mm caption FOLDER` | caption already-indexed segments without re-embedding (`--model`, `--frame-size`, `--caption-frames`, `--force`) |
-| `mm caption-compare A.csv B.csv` | several caption sets as one blind judging page |
-| `mm export VIDEO T0 T1` | one clip (`--pad`, `--no-smart`, `--no-snap`) |
+| `mm eval` | recall@k + MRR against hand labels (`--labels`, default `<data-dir>/labels.csv`) |
+| `mm caption FOLDER` | caption already-indexed segments without re-embedding; the only command that spends (`--model`, `--allow-paid --paid-budget-usd`, `--frame-size`, `--caption-frames`, `--force`) |
+| `mm caption-compare A.csv B.csv` | several caption sets as one blind judging page (`-o`, `--videos`) |
 | `mm serve` | resident HTTP search daemon (`/search`, `/health`) |
 | `mm status` | index statistics (`--errors` lists failed files) |
 | `mm help [COMMAND]` | this list / per-command help (also `--version`) |
@@ -65,12 +62,12 @@ The tool never changes or replaces a footage file, and every `make` target mount
 | the index (`manifest.db`, `lance/`) and the measured speed (`calibration.json`) | data folder | — |
 | caption cache, one file per video | `<data>/captions/<video id>.csv` | `--caption-dir` keeps a separate set |
 | labels from `mm annotate` | `<data>/labels.csv` | `--labels` |
-| clips from `mm export` | `<data>/cuts/<video>-<from>-<to><ext>` | `-o` (a file, or a folder to name it in) |
-| clips from `mm mine` (`<rank>_<video>-<from>-<to><ext>`), `.llc` projects from `mm search --llc` (`make search LLC=1`) | `<data>/cuts/<query>_<timestamp>/` | `-o`, `OUT=`, `--llc-dir` |
-| the `mm caption-compare` page and its key | `<data>/caption-comparison.html` | `-o` |
+| `.llc` projects from `mm search`, `<video>-<query>.llc` | `<data>/cuts/<query>_<timestamp>/` | `-o`, `OUT=` |
+| clips from `mm cut`, `<rank>_<video>-<from>-<to><ext>` | `<data>/cuts/<project>_<timestamp>/` | `-o`, `OUT=` |
+| the `mm caption-compare` page and its key | `<data>/cuts/caption-compare_<timestamp>/` | `-o` |
 | the `mm locate` page | only with `-o` | — |
 
-Clip names follow LosslessCut's default, `<video>-<from>-<to><ext>` with the exact cut times (`2M4A8050-00.01.12.345-00.01.20.678.MP4`). An existing file is never replaced: a clip or `.llc` whose name is taken is skipped, and the run ends listing what it skipped, with exit code 1. `mm index` never indexes a clip the tool exported, wherever it sits. The data folder may sit on any drive, footage folders included. Deleting the index costs a re-index; deleting `captions/` costs the captions again. Model weights are downloaded by their libraries into `~/.cache`, outside the tool's control.
+Clip names follow LosslessCut's default, `<video>-<from>-<to><ext>` with the exact cut times, and a segment ranked by `mm search` gets its rank in front, so a folder sorts best match first (`02_2M4A8050-00.01.12.345-00.01.20.678.MP4`). An existing file is never replaced: a clip, `.llc` or page whose name is taken is skipped, and the run ends listing what it skipped, with exit code 1. `mm index` never indexes a clip the tool exported, wherever it sits. A clip is written as `.partial-<name>` and renamed when complete, so a stopped or failed cut leaves no truncated clip; a `.partial-` file that a crash left behind is never indexed and can be deleted. The data folder may sit on any drive, footage folders included. Deleting the index costs a re-index; deleting `captions/` costs the captions again. Model weights are downloaded by their libraries into `~/.cache`, outside the tool's control.
 
 Every write passes one check, `moment_miner/guard.py`. It refuses to replace an existing video, and a path outside the data folder and the outputs named to the command. A refused write stops the command and names the path.
 
@@ -97,7 +94,9 @@ folder scan ─► SQLite manifest (size/mtime/partial-hash → incremental, res
 query (text | example clip) ─► ANN + BM25 ─► reciprocal-rank fusion
   ─► overlap merge ─► ranked (video, t0, t1, snippet)
 
-export ─► smartcut: frame-accurate at both ends, only the boundary GOPs
+  ─► one LosslessCut project per video, hits widened by --pad
+
+mm cut PROJECT.llc ─► smartcut: frame-accurate at both ends, only the boundary GOPs
   recoded, interior passed through bit-identically · --no-smart falls back
   to ffmpeg -c copy snapped to a keyframe (may start one GOP early)
 ```
@@ -116,7 +115,7 @@ Embedding backends are pluggable (`moment_miner/embeddings/`):
 
 A stream copy can only begin on a keyframe, so cutting by copy alone snaps the start backwards and opens with up to one GOP of footage nobody asked for — 0.48 s on the Canon 4K sources here.
 
-`mm export` therefore uses [smartcut](https://github.com/skeskinen/smartcut) (MIT) by default: it recodes only the GOPs at each boundary and passes everything between them through untouched. Measured on `footage/src/canon_50fps/2M4A2436.MP4`, asking for `1.2` to `3.0` (1.80 s):
+`mm cut` therefore uses [smartcut](https://github.com/skeskinen/smartcut) (MIT) by default: it recodes only the GOPs at each boundary and passes everything between them through untouched. Measured on `footage/src/canon_50fps/2M4A2436.MP4`, asking for `1.2` to `3.0` (1.80 s):
 
 | | start | clip duration | interior |
 |---|---|---|---|
@@ -173,7 +172,7 @@ docker run --rm moment-miner:dev     # run the test suite
 
 Footage is mounted read-only and never copied. `make` keeps its data in `~/.mm_data` and the model weights in `~/.cache/moment-miner`, and runs the container as you, so both hold ordinary files you own. `DATA` and `CACHE` take a docker volume name or an absolute path, so the index and the model weights can sit on the same drive as the footage rather than on the system disk.
 
-Day to day, the Makefile wraps all of this: `make test`, `make index VIDEOS=/path`, `make search Q="kong vault"`, `make mine Q="..." OUT=clips`, `make annotate TEMPLATE=parkour`, `make eval`, `make probe PROMPTS=my.txt`, `make serve`, `make shell` — add `GPUS=--gpus=all` on a GPU box. API keys go in `.env`, git-ignored; copy `.env.example` and fill in what you need.
+Day to day, the Makefile wraps all of this: `make test`, `make index VIDEOS=/path`, `make search Q="kong vault" OUT=clips`, `make cut PROJECT=clips/<file>.llc`, `make caption VIDEOS=/path`, `make annotate TEMPLATE=parkour`, `make eval`, `make probe PROMPTS=my.txt`, `make serve`, `make shell` — add `GPUS=--gpus=all` on a GPU box. API keys go in `.env`, git-ignored; copy `.env.example` and fill in what you need.
 
 **Vast.ai:** either push the image (`docker tag moment-miner <user>/moment-miner && docker push <user>/moment-miner`) and use it as the instance image, or launch a stock `pytorch/pytorch` template and put this in the on-start script:
 
@@ -266,7 +265,7 @@ curl localhost:7700/health    # backend, device, segment count
 
 ```bash
 mm eval                              # <data-dir>/labels.csv; columns: query,video,start,end
-mm eval other-labels.csv             # any other file
+mm eval --labels other-labels.csv    # any other file
 ```
 
 It prints which labels file it scored before the scores.
@@ -319,7 +318,7 @@ Available templates (`moment_miner/templates/`, also listed by `mm annotate --te
 
 ### Captioning with a VLM
 
-Hand labels are ground truth for `mm eval`. Captions are the other half: `mm index --caption claude-haiku-4-5` writes one sentence per segment into the searchable text, so silent footage is findable by word and not only by pixel similarity. Captions are cached in the data folder and reused on re-index. `mm caption <folder>` does the same for an index that already exists, without re-embedding it. `mm caption-compare a.csv b.csv --videos <folder>` renders several caption sets as one blind judging page, marking where the models disagree. Method, both routes, credentials and cost per hour: [docs/captions.md](docs/captions.md).
+Hand labels are ground truth for `mm eval`. Captions are the other half: `mm caption <folder> --model claude-haiku-4-5` writes one sentence per indexed segment into the searchable text, without re-embedding, so silent footage is findable by word and not only by pixel similarity. Captions are cached in the data folder, kept through a re-index, and never bought twice. `mm caption-compare a.csv b.csv --videos <folder>` renders several caption sets as one blind judging page, marking where the models disagree. Method, both routes, credentials and cost per hour: [docs/captions.md](docs/captions.md).
 
 ## Tests
 

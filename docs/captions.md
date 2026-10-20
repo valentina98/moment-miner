@@ -1,6 +1,6 @@
 # Captioning segments
 
-`mm index --caption <model>` writes one sentence per segment into the searchable text. This is what makes a silent clip findable by word. `mm caption FOLDER` does the same for segments already indexed, without re-embedding them.
+`mm caption FOLDER --model <model>` writes one sentence per indexed segment into the searchable text, without re-embedding. This is what makes a silent clip findable by word. `mm index` never captions.
 
 ## Why
 
@@ -16,7 +16,7 @@ They are separate files on purpose. **Captions are machine-written indexed conte
 
 Columns: `id,t0,t1,action,who,scene,light,caption,model,written`.
 
-Captions are read back on the next pass. Re-indexing a folder — including `--reindex` — reuses the captions already on disk and only spends on segments that don't have one. Re-indexing without `--caption` spends nothing and keeps each segment's stored caption in its searchable text, as long as the segment geometry is unchanged. This is why the cache sits beside the index rather than in it: a caption costs session quota (money only on the API-key route), so re-indexing, a model change or a deleted index never touches `captions/`.
+Captions are read back on every pass. `mm caption` buys only segments that don't have one, unless `--force`. `mm index`, `--reindex` included, spends nothing and keeps each segment's stored caption in its searchable text, as long as the segment geometry is unchanged. This is why the cache sits beside the index rather than in it: a caption costs session quota (money only on the API-key route), so re-indexing, a model change or a deleted index never touches `captions/`.
 
 ## The method
 
@@ -55,19 +55,19 @@ Three things are left out on purpose. **Outcome** — clean landing, bail, slip 
 
 Resolved in this order, once, when the first caption is requested. The free route wins, and the paid one is refused unless it was asked for and capped.
 
-1. Claude Code's subscription token: `claudeAiOauth.accessToken` in `$CLAUDE_CONFIG_DIR/.credentials.json` (default `~/.claude`), and nothing else in that file, which also holds refresh tokens and MCP servers' tokens. Under Docker the file never enters the container: `make caption` and `make recaption` copy that one value into a temp file, mount it read-only and delete it afterwards, and no other target gets a token — spends session quota, no money
+1. Claude Code's subscription token: `claudeAiOauth.accessToken` in `$CLAUDE_CONFIG_DIR/.credentials.json` (default `~/.claude`), and nothing else in that file, which also holds refresh tokens and MCP servers' tokens. Under Docker the file never enters the container: `make caption` copies that one value into a temp file, mount it read-only and delete it afterwards, and no other target gets a token — spends session quota, no money
 2. `ANTHROPIC_API_KEY` — spends money, so it is used **only** with `--allow-paid` and `--paid-budget-usd` above zero. A key on its own, even with no subscription credentials present, raises rather than bills
 3. Neither — one error naming both, raised before any frame is sent
 
 The budget is a gate, not a meter: it is checked before the first request and nothing counts dollars as the pass runs. Metering is a next step, not a feature this claims.
 
-Captioning is the only stage that spends anything — money on an API key, session quota on a subscription. `mm index` without `--caption` needs no credentials at all.
+Captioning is the only stage that spends anything — money on an API key, session quota on a subscription. `mm index` needs no credentials at all.
 
 ## What it costs
 
-**Nothing, on the subscription route.** The Claude Code token spends session quota and no money, and it is the route both `make caption` and `make recaption` take. The figures below are what the same work would cost through `ANTHROPIC_API_KEY`, which is only reachable with `--allow-paid` and a budget.
+**Nothing, on the subscription route.** The Claude Code token spends session quota and no money, and it is the route `make caption` takes. The figures below are what the same work would cost through `ANTHROPIC_API_KEY`, which is only reachable with `--allow-paid` and a budget.
 
-Segments per hour of footage is `3600 / stride` — 900 at the default stride 4, and higher on an archive of short clips, whose truncated windows do not overlap (a 50-clip corpus measured 1086). A still at `mm caption`'s default 640x360 is ~300 input tokens (299 by counting 28-pixel tiles, 307 by `w x h / 750`; confirm with `count_tokens` before a bulk run), the prompt adds ~200, and ~30 output tokens come back. So an ordinary two-still segment is ~800 in and ~30 out, and an hour of footage is **0.72 M input, 0.027 M output**. Under `mm index --caption` stills are the 456x256 the embedding already decoded, ~170 tokens each, which is about 0.6x of that.
+Segments per hour of footage is `3600 / stride` — 900 at the default stride 4, and higher on an archive of short clips, whose truncated windows do not overlap (a 50-clip corpus measured 1086). A still at `mm caption`'s default 640x360 is ~300 input tokens (299 by counting 28-pixel tiles, 307 by `w x h / 750`; confirm with `count_tokens` before a bulk run), the prompt adds ~200, and ~30 output tokens come back. So an ordinary two-still segment is ~800 in and ~30 out, and an hour of footage is **0.72 M input, 0.027 M output**.
 
 **Frame count is the main cost lever** — each extra still adds ~300 tokens to an ~800-token request, so forcing 5 frames costs roughly 1.9x what the rule's two do.
 
@@ -84,16 +84,15 @@ Prices read from Anthropic's model pricing 2026-06-24; re-check before a bulk ru
 ## Running it
 
 ```bash
-mm index /videos --caption claude-haiku-4-5
-mm index /videos --caption claude-opus-5 --caption-frames-long 6
-make caption VIDEOS=footage CAPTION_MODEL=claude-haiku-4-5
-mm caption /videos --model claude-haiku-4-5 --frame-size 640x360
-make recaption VIDEOS=footage/src CAPTION_MODEL=claude-haiku-4-5 ARGS="--force"
+mm caption /videos --model claude-haiku-4-5
+mm caption /videos --model claude-opus-5 --caption-frames-long 6
+mm caption /videos --model claude-haiku-4-5 --allow-paid --paid-budget-usd 2
+make caption VIDEOS=footage/src CAPTION_MODEL=claude-haiku-4-5 ARGS="--force"
 ```
 
-**Two routes.** `mm index --caption` captions while it indexes, from the frames it already decoded for the embedding, so the model never sees more than 456x256. `mm caption` is a separate pass over an index that already exists: it reads each segment's span from the store, seeks to the same instants `index --caption` would pick, decodes only those stills at `--frame-size` (default 640x360; anything wider than 640 px is downscaled before sending, `FRAME_WIDTH` in `captions.py`), then rewrites the row's `text` as transcript plus caption and rebuilds the FTS index. Vectors, schema and fusion are untouched, and the embedding model is never loaded. Use it when the caption model, prompt or raster changes and the embeddings have not, which costs no re-index. Segments that already have a cached caption are not bought again, but the cached caption is still written into the row; `--force` buys a fresh one. Stride and frames-per-window are read from what the manifest recorded for each video.
+**How it runs.** `mm caption` is a separate pass over an index that already exists: it reads each segment's span from the store, seeks to the instants the frame rule above picks, decodes only those stills at `--frame-size` (default 640x360; anything wider than 640 px is downscaled before sending, `FRAME_WIDTH` in `captions.py`), then rewrites the row's `text` as transcript plus caption and rebuilds the FTS index. Vectors, schema and fusion are untouched, and the embedding model is never loaded. Use it when the caption model, prompt or raster changes and the embeddings have not, which costs no re-index. Segments that already have a cached caption are not bought again, but the cached caption is still written into the row; `--force` buys a fresh one. Stride and frames-per-window are read from what the manifest recorded for each video.
 
-`make caption` and `make recaption` mount the footage `:ro` like every other target and pass the subscription token. A caption cache that cannot be written fails before the first paid request, rather than after.
+`make caption` mounts the footage `:ro` like every other target, and is the only target given the subscription token. A caption cache that cannot be written fails before the first paid request, rather than after.
 
 ## Comparing caption sets
 
