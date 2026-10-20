@@ -77,6 +77,8 @@ def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex, es
     Never captions and never spends: `mm caption` does that. A re-indexed
     segment keeps the captions it already had.
     """
+    from tqdm import tqdm
+
     from .embeddings import get_backend
     from .indexer import index_pending, index_settings
 
@@ -90,17 +92,27 @@ def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex, es
     settings = index_settings(be.name, window, stride)
     _report_stale_elsewhere(manifest, settings, folder)
     pending = manifest.pending(settings, folder)
-    eta, failed = (_estimate(data_dir, be, pending, window, stride, asr)
-                   if estimate and pending else (None, {}))
+    eta, segments, failed = (_estimate(data_dir, be, pending, window, stride, asr)
+                             if estimate and pending else (None, None, {}))
     store = SegmentStore(data_dir, be.name)
     started = time.time()
-    result = index_pending(
-        manifest, store, be, use_asr=asr, asr_model=asr_model,
-        axis_store=AxisStore(data_dir),
-        win=window, stride=stride, log=click.echo,
-        folder=folder,
-        failed=failed,
-    )
+    # tqdm, not click.progressbar: click draws nothing when stdout is not a
+    # terminal, and `make index` runs docker without -t. Log lines still go
+    # through click.echo, which flushes; tqdm.write does not, and a piped
+    # stdout would hold every line back until the run ends.
+    def log(msg):
+        with tqdm.external_write_mode():
+            click.echo(msg)
+
+    with tqdm(total=segments, unit="segment", disable=not pending, mininterval=1.0,
+              dynamic_ncols=True) as bar:
+        result = index_pending(
+            manifest, store, be, use_asr=asr, asr_model=asr_model,
+            axis_store=AxisStore(data_dir),
+            win=window, stride=stride, log=log, progress=bar.update,
+            folder=folder,
+            failed=failed,
+        )
     took = f"; took {(time.time() - started) / 60:.1f} min"
     if eta is not None:
         took += f", estimated {eta / 60:.1f}"
@@ -108,8 +120,9 @@ def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex, es
 
 
 def _estimate(data_dir, be, pending, window, stride, asr):
-    """The ETA line, and the files whose probe failed here, which the index
-    pass marks failed without waiting on the same hung probe a second time."""
+    """The ETA line, the segment count the progress bar fills, and the files
+    whose probe failed here, which the index pass marks failed without waiting
+    on the same hung probe a second time."""
     from .calibrate import calibrate, estimate, load_rate
 
     rate = load_rate(data_dir, be.name)
@@ -121,14 +134,14 @@ def _estimate(data_dir, be, pending, window, stride, asr):
         segments, seconds, eta, failed = estimate(pending, rate, window, stride)
     except Exception as e:
         click.echo(f"estimate: unavailable ({e})")
-        return None, {}
+        return None, None, {}
     for path, error in failed.items():
         click.echo(f"estimate: {on_host(path)} could not be probed, skipped this run ({error})")
     note = "; speech recognition comes on top" if asr else ""
     click.echo(f"estimate: {len(pending) - len(failed)} video(s), {seconds / 60:.1f} min of "
                f"video, {segments} segments, ~{eta / 60:.1f} min at "
                f"{rate['s_per_segment']} s/segment{note}")
-    return eta, failed
+    return eta, segments, failed
 
 
 @main.command()
