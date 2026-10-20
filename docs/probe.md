@@ -8,7 +8,7 @@
 make probe VIDEOS=footage/src PROMPTS=prompts.txt RANKER=laya K=3
 ```
 
-`PROMPTS` is one prompt per line, relative to the repo rather than to `VIDEOS`, which often points at an external drive. Captions come from the index; `ARGS=--captions /data/<set>/captions.csv` reads a caption set written with `--caption-dir` instead.
+`PROMPTS` is one prompt per line, relative to the repo rather than to `VIDEOS`, which often points at an external drive. Captions come from the index; `ARGS="--captions NAME"` reads a caption set from the cache instead, one written with `mm caption --caption-set NAME` (`mm status` lists them).
 
 ```
 Pull-ups

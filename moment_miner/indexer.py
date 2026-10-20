@@ -9,7 +9,8 @@ from .captions import (
     CaptionBackend,
     joined,
     frames_for_duration,
-    open_captions,
+    DEFAULT_SET,
+    CaptionCache,
     still_times,
 )
 from .embeddings.base import EmbeddingBackend
@@ -198,7 +199,7 @@ def caption_indexed(
     frame_w: int = 640,
     frame_h: int = 360,
     data_dir=None,
-    caption_dir=None,
+    caption_set: str = DEFAULT_SET,
     axis_store: AxisStore | None = None,
     caption_frames: int | None = None,
     caption_frames_short: int | None = None,
@@ -220,6 +221,7 @@ def caption_indexed(
     captions bought earlier.
     """
     caption_backend.preflight()
+    cache = CaptionCache(data_dir, caption_set)
     prefix = str(Path(folder).resolve()).rstrip(os.sep) + os.sep
     by_path = defaultdict(list)
     for r in store.segments():
@@ -237,8 +239,6 @@ def caption_indexed(
             max(r["t1"] for r in rows), short=caption_frames_short,
             normal=caption_frames, long=caption_frames_long,
             short_video_s=short_video_s, long_video_s=long_video_s)
-        cache = open_captions(data_dir, rows[0]["video_id"], caption_dir)
-        cache.check_writable()
         try:
             for r in sorted(rows, key=lambda r: r["t0"]):
                 t0, t1 = r["t0"], r["t1"]
@@ -263,9 +263,7 @@ def caption_indexed(
             counts["errors"] += 1
             log(f"    ERROR: {e}")
         finally:
-            # Captions already paid for are kept even when a later one fails.
-            cache.vote()
-            cache.flush()
+            cache.vote(rows[0]["video_id"])
             # The vote can change rows already written, so the store is
             # refreshed from the cache rather than from the per-segment pass.
             axis_rows = []
