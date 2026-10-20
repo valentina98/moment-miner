@@ -48,7 +48,7 @@ def test_keyframe_helpers(fast_video):
 @requires_ffmpeg
 def test_smart_cut_is_frame_accurate_at_both_ends(tmp_path, fast_video):
     out = tmp_path / "smart.mp4"
-    _, a0, a1 = export_clip(str(fast_video), 2.2, 4.0, str(out), pad=0.0)
+    _, a0, a1 = export_clip(str(fast_video), 2.2, 4.0, str(out))
 
     assert abs(a0 - 2.2) < 1e-6 and abs(a1 - 4.0) < 1e-6
     # Both boundaries are cut, so the duration lands within a frame either way.
@@ -65,7 +65,7 @@ def test_smart_cut_interior_is_the_untouched_source(tmp_path, fast_video):
     starting four frames early.
     """
     out = tmp_path / "smart.mp4"
-    export_clip(str(fast_video), 2.2, 4.0, str(out), pad=0.0)
+    export_clip(str(fast_video), 2.2, 4.0, str(out))
 
     # 2.7 s is past the first keyframe after 2.2 s, so it is copied, not recoded.
     source = _decoded(str(fast_video), 2.7, 0.2)
@@ -76,7 +76,7 @@ def test_smart_cut_interior_is_the_untouched_source(tmp_path, fast_video):
 @requires_ffmpeg
 def test_no_smart_snaps_back_to_a_keyframe(tmp_path, fast_video):
     out = tmp_path / "snapped.mp4"
-    _, a0, _ = export_clip(str(fast_video), 2.2, 4.0, str(out), pad=0.0, smart=False)
+    _, a0, _ = export_clip(str(fast_video), 2.2, 4.0, str(out), smart=False)
     assert abs(a0 - 2.0) < 0.05
     assert probe(str(out))["duration"] > 1.8
 
@@ -85,7 +85,7 @@ def test_no_smart_snaps_back_to_a_keyframe(tmp_path, fast_video):
 def test_smart_cut_video_only_source(tmp_path, silent_video):
     """Canon clips are not all the same shape: 2M4A2377.MP4 has no audio."""
     out = tmp_path / "silent_cut.mp4"   # not the fixture's own path
-    _, a0, a1 = export_clip(str(silent_video), 1.0, 2.0, str(out), pad=0.0)
+    _, a0, a1 = export_clip(str(silent_video), 1.0, 2.0, str(out))
     assert abs(a0 - 1.0) < 1e-6 and abs(a1 - 2.0) < 1e-6
     assert _stream_kinds(str(out)) == ["video"]
     assert not probe(str(out))["has_audio"]
@@ -95,3 +95,47 @@ def test_smart_cut_video_only_source(tmp_path, silent_video):
 def test_smart_cut_reports_failure(tmp_path):
     with pytest.raises(Exception):
         export_clip(str(tmp_path / "nope.mp4"), 1.0, 2.0, str(tmp_path / "o.mp4"))
+
+
+@requires_ffmpeg
+@pytest.mark.parametrize("smart", [True, False])
+def test_a_clip_appears_under_its_name_only_once_complete(tmp_path, fast_video, monkeypatch,
+                                                          smart):
+    from moment_miner import export
+
+    out = tmp_path / "clips" / "clip.mp4"
+    out.parent.mkdir()
+    real = export.smart_cut if smart else export._stream_copy
+
+    def watched(path, start, end, part):
+        real(path, start, end, part)
+        assert not out.exists() and part != str(out)
+
+    monkeypatch.setattr(export, "smart_cut" if smart else "_stream_copy", watched)
+    export_clip(str(fast_video), 2.2, 4.0, str(out), smart=smart)
+    assert [p.name for p in out.parent.iterdir()] == ["clip.mp4"]
+
+
+@pytest.mark.parametrize("stop", [RuntimeError("smart cut failed"), KeyboardInterrupt()])
+def test_a_cut_that_stops_midway_leaves_no_file(tmp_path, monkeypatch, stop):
+    from moment_miner import export
+
+    def half_written(path, start, end, part):
+        with open(part, "wb") as f:
+            f.write(b"truncated")
+        raise stop
+
+    monkeypatch.setattr(export, "smart_cut", half_written)
+    with pytest.raises(type(stop)):
+        export_clip(str(tmp_path / "src.mp4"), 1.0, 2.0, str(tmp_path / "clip.mp4"))
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_an_index_never_picks_up_a_clip_a_crash_left_half_written(tmp_path):
+    from moment_miner.manifest import PARTIAL, Manifest
+
+    (tmp_path / "footage").mkdir()
+    (tmp_path / "footage" / "a.mp4").write_bytes(b"x" * 64)
+    (tmp_path / "footage" / f"{PARTIAL}01_a-00.00.01.000-00.00.02.000.mp4").write_bytes(b"x")
+    manifest = Manifest(tmp_path / "data" / "manifest.db")
+    assert manifest.scan(tmp_path / "footage")["new"] == 1
