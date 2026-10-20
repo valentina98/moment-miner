@@ -74,6 +74,9 @@ def help_cmd(ctx, command):
 def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex, estimate):
     """Scan FOLDER recursively and index new, changed and failed videos.
 
+    Skips the clips this tool exported and LosslessCut exports saved beside
+    their source.
+
     Never captions and never spends: `mm caption` does that. A re-indexed
     segment keeps the captions it already had.
     """
@@ -86,7 +89,11 @@ def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex, es
         manifest.reset(folder)
     be = get_backend(backend)
     _forget_missing(manifest, counts, data_dir, be.name, folder)
+    skipped = counts["skipped"]
+    counts["skipped"] = len(skipped)
     click.echo(f"scan: {counts}")
+    for parent, n in sorted(Counter(str(Path(p).parent) for p in skipped).items()):
+        click.echo(f"skipped: {n} LosslessCut export(s) beside their source in {on_host(parent)}")
     settings = index_settings(be.name, window, stride)
     _report_stale_elsewhere(manifest, settings, folder)
     pending = manifest.pending(settings, folder)
