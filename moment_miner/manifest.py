@@ -135,6 +135,14 @@ class Manifest:
         ]
         return counts
 
+    def paths(self, folder: str | Path | None = None) -> list[str]:
+        """Every indexed video's path, or those under folder."""
+        rows = [r["path"] for r in self.conn.execute("SELECT path FROM videos ORDER BY path")]
+        if folder is None:
+            return rows
+        prefix = _prefix(folder)
+        return [p for p in rows if p.startswith(prefix)]
+
     def forget(self, path: str):
         """Drop a video that is no longer on disk."""
         with self.conn:
