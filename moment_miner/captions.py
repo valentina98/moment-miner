@@ -49,6 +49,12 @@ LIGHTS = ("sunny", "overcast", "golden hour", "dusk/dawn", "night", "floodlit",
 
 DEFAULT_PROMPT = "general"
 
+# Seconds one caption request may take before it fails, the same limit as the
+# ranker's call (rankers.py). A caption takes ~3 s; the SDK's own default is
+# 600 s, retried twice, so a hung request stalled a pass for 30 minutes. A
+# failed request fails its video, and the next pass buys only what is missing.
+REQUEST_TIMEOUT_S = 60.0
+
 
 def parse_axes(reply: str) -> dict[str, str]:
     """A model's reply -> one value per axis, never empty.
@@ -361,7 +367,7 @@ class ClaudeCaptionBackend(CaptionBackend):
                 paid_budget_usd=self._paid_budget_usd)
             if "auth_token" in kwargs:
                 kwargs["default_headers"] = {"anthropic-beta": "oauth-2025-04-20"}
-            self._client = anthropic.Anthropic(**kwargs)
+            self._client = anthropic.Anthropic(timeout=REQUEST_TIMEOUT_S, **kwargs)
         return self._client
 
     def preflight(self) -> None:

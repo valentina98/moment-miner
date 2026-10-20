@@ -112,7 +112,7 @@ def test_no_credentials_raises_naming_both(tmp_path):
     assert "Claude Code" in str(e.value)
 
 
-def test_oauth_route_sends_the_beta_header(tmp_path, monkeypatch):
+def test_oauth_route_sends_the_beta_header_and_a_timeout(tmp_path, monkeypatch):
     (tmp_path / ".credentials.json").write_text(json.dumps(CLAUDE_CREDS))
     captured = {}
 
@@ -129,6 +129,7 @@ def test_oauth_route_sends_the_beta_header(tmp_path, monkeypatch):
     be.client
     assert captured["auth_token"] == "oauth-value"
     assert captured["default_headers"]["anthropic-beta"] == "oauth-2025-04-20"
+    assert captured["timeout"] == 60.0
 
 
 # --- captioning -----------------------------------------------------------
@@ -373,6 +374,50 @@ def test_caption_pass_over_an_existing_index(tmp_path, synthetic_video):
     vid = next(iter(before)).split(":")[0]
     cache = open_captions(tmp_path / "data", vid)
     assert all(cache.get(i)["action"] == "kong vault over a rail" for i in before)
+
+
+@requires_ffmpeg
+def test_a_caption_request_that_never_answers_fails_its_video_not_the_pass(
+        tmp_path, synthetic_video, monkeypatch):
+    import socket
+    import threading
+
+    from moment_miner import captions
+    from moment_miner.indexer import caption_indexed
+
+    manifest, store = _indexed(tmp_path, synthetic_video)
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen()
+    held = []
+    stop = threading.Event()
+
+    def accept_and_say_nothing():
+        server.settimeout(0.2)
+        while not stop.is_set():
+            try:
+                held.append(server.accept()[0])
+            except socket.timeout:
+                pass
+
+    thread = threading.Thread(target=accept_and_say_nothing, daemon=True)
+    thread.start()
+    (tmp_path / ".credentials.json").write_text(json.dumps(CLAUDE_CREDS))
+    monkeypatch.setattr(captions, "REQUEST_TIMEOUT_S", 0.5)
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", f"http://127.0.0.1:{server.getsockname()[1]}")
+    be = ClaudeCaptionBackend("claude-haiku-4-5", env={"CLAUDE_CONFIG_DIR": str(tmp_path)})
+    try:
+        counts = caption_indexed(manifest, store, be, synthetic_video.parent,
+                                 frame_w=200, frame_h=120, data_dir=tmp_path / "data",
+                                 log=lambda *a: None)
+    finally:
+        stop.set()
+        thread.join()
+        for c in held:
+            c.close()
+        server.close()
+    assert counts["errors"] == 1 and counts["captioned"] == 0
+    assert held, "the request never reached the server"
 
 
 @requires_ffmpeg
