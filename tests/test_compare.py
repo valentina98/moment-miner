@@ -128,14 +128,14 @@ def test_only_segments_present_in_all_files_are_compared(tmp_path):
 def test_cli_writes_page_and_key(tmp_path):
     for n in (1, 2):
         write_captions(tmp_path / f"m{n}.csv", sidecar(6, lambda i: f"caption {n} {i}"))
-    out = tmp_path / "cmp.html"
+    out = tmp_path / "cmp"
     result = CliRunner().invoke(main, [
         "caption-compare", str(tmp_path / "m1.csv"), str(tmp_path / "m2.csv"),
         "-o", str(out), "--seed", "3",
     ])
     assert result.exit_code == 0, result.output
-    assert out.exists()
-    key = tmp_path / "cmp-key.csv"
+    assert (out / "caption-comparison.html").exists()
+    key = out / "caption-comparison-key.csv"
     assert key.exists()
     rows = list(csv.DictReader(key.open()))
     assert len(rows) == 6 and set(rows[0]) == {"seg", "A", "B"}
@@ -144,13 +144,13 @@ def test_cli_writes_page_and_key(tmp_path):
 def test_cli_no_blind_writes_no_key(tmp_path):
     for n in (1, 2):
         write_captions(tmp_path / f"m{n}.csv", sidecar(6, lambda i: f"caption {n} {i}"))
-    out = tmp_path / "cmp.html"
+    out = tmp_path / "cmp"
     result = CliRunner().invoke(main, [
         "caption-compare", str(tmp_path / "m1.csv"), str(tmp_path / "m2.csv"),
         "-o", str(out), "--no-blind",
     ])
     assert result.exit_code == 0, result.output
-    assert not (tmp_path / "cmp-key.csv").exists()
+    assert [p.name for p in out.iterdir()] == ["caption-comparison.html"]
 
 
 def test_frames_dir_is_used_when_the_archive_is_offline(tmp_path):
@@ -188,6 +188,7 @@ def test_page_defaults_to_the_data_folder_not_the_footage(tmp_path):
         "--videos", str(archive),
     ])
     assert result.exit_code == 0, result.output
-    assert (tmp_path / "data" / "caption-comparison.html").exists()
-    assert (tmp_path / "data" / "caption-comparison-key.csv").exists()
+    [run] = (tmp_path / "data" / "cuts").glob("caption-compare_*")
+    assert sorted(p.name for p in run.iterdir()) == ["caption-comparison-key.csv",
+                                                     "caption-comparison.html"]
     assert not any(archive.iterdir())

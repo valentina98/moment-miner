@@ -9,6 +9,8 @@ description = "Natural-language and example-based search over large video archiv
 requires-python = ">=3.11"
 dependencies = [
     "click>=8.1",
+    # LosslessCut saves its projects as JSON5.
+    "json5>=0.9",
     "lancedb>=0.15",
     "numpy>=1.26",
 ]

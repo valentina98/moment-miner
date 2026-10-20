@@ -332,7 +332,7 @@ def resolve_credentials(env=None, config_dir=None, *, allow_paid: bool = False,
         f"no captioning credentials: sign in to Claude Code so that {cred} "
         "exists (mount it into the container). ANTHROPIC_API_KEY is the paid "
         "alternative and needs --allow-paid with a budget. Captioning is the "
-        "only stage that needs either; indexing without --caption needs neither."
+        "only stage that needs either; indexing needs neither."
     )
 
 

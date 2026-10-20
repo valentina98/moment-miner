@@ -77,11 +77,10 @@ def test_index_and_export(tmp_path, synthetic_video):
     assert all(0 <= h["t0"] < h["t1"] <= 10.5 for h in hits)
 
     out = tmp_path / "clip.mp4"
-    _, a0, a1 = export_clip(str(synthetic_video), 3.0, 6.0, str(out),
-                            pad=0.5, snap=True, smart=False)
+    _, a0, a1 = export_clip(str(synthetic_video), 2.5, 6.5, str(out), smart=False)
     assert out.stat().st_size > 1024
     # GOP is 30 frames @ 15fps → keyframes at 0/2/4s; start 2.5s must snap to 2.0
-    assert abs(a0 - 2.0) < 0.1 and a1 >= 6.5
+    assert abs(a0 - 2.0) < 0.1 and a1 == 6.5
     assert abs(probe(str(out))["duration"] - (a1 - a0)) < 1.0
 
     # Re-scan: nothing new, nothing pending.
@@ -265,7 +264,7 @@ def test_an_index_with_no_recorded_settings_still_searches(indexable):
 
 
 def test_a_reindex_without_captioning_keeps_the_stored_captions(indexable, tmp_path):
-    """Re-embedding a captioned video without --caption wrote transcript-only
+    """Re-embedding a captioned video without a caption pass wrote transcript-only
     text over every caption, emptying the full-text half of search."""
     from moment_miner.store import AxisStore
 
