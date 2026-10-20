@@ -12,7 +12,7 @@ from .locate import LOCATORS
 from .hostpaths import UserPath, on_host
 from .manifest import Manifest
 from .motion import STATIC_MAX
-from .store import AxisStore, MotionStore, SegmentStore
+from .store import AxisStore, SegmentStore
 from .timefmt import fmt_ts, parse_ts
 
 
@@ -96,7 +96,6 @@ def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex, es
     started = time.time()
     result = index_pending(
         manifest, store, be, use_asr=asr, asr_model=asr_model,
-        motion_store=MotionStore(data_dir),
         axis_store=AxisStore(data_dir),
         win=window, stride=stride, log=click.echo,
         folder=folder,
@@ -163,8 +162,7 @@ def _forget_missing(manifest, counts, data_dir, backend_name, folder):
         click.echo(f"kept: all {len(missing)} indexed video(s) under {on_host(folder)} are "
                    "missing -- a different mount root? Nothing removed.")
         return
-    stores = [SegmentStore(data_dir, backend_name), MotionStore(data_dir),
-              AxisStore(data_dir)]
+    stores = [SegmentStore(data_dir, backend_name), AxisStore(data_dir)]
     for path in missing:
         for store in stores:
             store.delete_path(path)
@@ -355,9 +353,7 @@ def search(data_dir, query, k, backend, as_json, output, pad, static, static_max
 
     be = get_backend(backend)
     store = SegmentStore(data_dir, be.name)
-    hits = run_search(query, be, store, k=k, static=static,
-                      motion_store=MotionStore(data_dir),
-                      static_max=static_max)
+    hits = run_search(query, be, store, k=k, static=static, static_max=static_max)
     manifest = Manifest(data_dir / "manifest.db")
     for h in hits:
         row = manifest.video(h["path"])

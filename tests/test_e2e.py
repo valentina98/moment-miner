@@ -73,7 +73,7 @@ def test_index_and_export(tmp_path, synthetic_video):
     info = probe(str(synthetic_video))
     assert 9.5 < info["duration"] < 10.5
 
-    hits = store.vector_search(be.embed_text(["anything"])[0], k=3)
+    hits = store.search(be.embed_text(["anything"])[0], "anything", k=3)
     assert all(0 <= h["t0"] < h["t1"] <= 10.5 for h in hits)
 
     out = tmp_path / "clip.mp4"
@@ -111,7 +111,19 @@ def test_truncated_video_keeps_its_readable_prefix(tmp_path, synthetic_video, mo
     result = index_pending(manifest, store, be, use_asr=False, log=lambda *_: None)
     assert result["indexed"] == 1 and result["errors"] == 0
     assert result["segments"] == 2
-    assert all(h["t0"] < 8.0 for h in store.vector_search(be.embed_text(["x"])[0], k=10))
+    assert all(h["t0"] < 8.0 for h in store.search(be.embed_text(["x"])[0], "x", k=10))
+
+
+@requires_ffmpeg
+def test_each_segment_row_carries_its_motion_value(tmp_path, synthetic_video):
+    """`--static` and `--moving` filter on this column inside the search query."""
+    be = MockBackend()
+    manifest = Manifest(tmp_path / "mm.db")
+    store = SegmentStore(tmp_path / "data", be.name)
+    manifest.scan(synthetic_video.parent)
+    index_pending(manifest, store, be, use_asr=False, log=lambda *_: None)
+    rows = store.table.search().limit(100).to_list()
+    assert rows and all(0.0 <= r["motion"] <= 1.0 for r in rows)
 
 
 @requires_ffmpeg

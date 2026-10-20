@@ -347,6 +347,10 @@ def _indexed(tmp_path, synthetic_video):
     return manifest, store
 
 
+def _fts(store, query):
+    return store.table.search(query, query_type="fts").limit(100).to_list()
+
+
 @requires_ffmpeg
 def test_caption_pass_over_an_existing_index(tmp_path, synthetic_video):
     from moment_miner.indexer import caption_indexed
@@ -354,7 +358,7 @@ def test_caption_pass_over_an_existing_index(tmp_path, synthetic_video):
     manifest, store = _indexed(tmp_path, synthetic_video)
     before = {r["id"]: list(map(float, r["vector"]))
               for r in store.table.search().limit(100).to_list()}
-    assert store.text_search("kong") == []
+    assert _fts(store, "kong") == []
 
     be = Recording()
     counts = caption_indexed(manifest, store, be, synthetic_video.parent,
@@ -365,7 +369,7 @@ def test_caption_pass_over_an_existing_index(tmp_path, synthetic_video):
     assert all(r["text"] == "kong vault over a rail, unclear, unclear, unclear"
                for r in rows)
     assert {r["id"]: list(map(float, r["vector"])) for r in rows} == before
-    assert {h["id"] for h in store.text_search("kong")} == set(before)
+    assert {h["id"] for h in _fts(store, "kong")} == set(before)
     vid = next(iter(before)).split(":")[0]
     cache = open_captions(tmp_path / "data", vid)
     assert all(cache.get(i)["action"] == "kong vault over a rail" for i in before)
@@ -400,8 +404,8 @@ def test_caption_pass_skips_segments_the_cache_has(tmp_path, synthetic_video):
     counts = caption_indexed(manifest, store, forced, synthetic_video.parent,
                              force=True, data_dir=tmp_path / "data", log=lambda *a: None)
     assert counts["captioned"] == 2 and len(forced.shapes) == 2
-    assert len(store.text_search("backflip")) == 2
-    assert store.text_search("kong") == []
+    assert len(_fts(store, "backflip")) == 2
+    assert _fts(store, "kong") == []
 
 
 @requires_ffmpeg

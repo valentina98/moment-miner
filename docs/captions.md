@@ -4,7 +4,7 @@
 
 ## Why
 
-`search()` fuses two rankings with RRF: vector similarity over the segment embeddings, and full-text search over the `text` column (`moment_miner/search.py:38-42`). That column is filled from the Whisper transcript and nothing else (`moment_miner/indexer.py`), and it carries the FTS index (`moment_miner/store.py:52`).
+`search()` fuses two rankings with RRF, as one LanceDB hybrid query: vector similarity over the segment embeddings, and full-text search over the `text` column (`SegmentStore.search`, `moment_miner/store.py`). That column is filled from the Whisper transcript and nothing else (`moment_miner/indexer.py`), and it carries the FTS index (`SegmentStore.rebuild_fts`).
 
 Footage without speech leaves that column empty, so the text half of the fusion contributes nothing and search is effectively vision-only. Captions populate it — "pull-up" or "foam pit" become findable by word rather than only by pixel similarity. Captions are appended to the same column: no schema change, no change to the fusion.
 
@@ -47,7 +47,7 @@ Three things are left out on purpose. **Outcome** — clean landing, bail, slip 
 
 **The prompt is a template, and two ship.** They live in `moment_miner/templates/` as `caption_<name>.txt` and are chosen with `--caption-prompt`, which also takes a path to your own. `general` is the one to copy: it names the four axes with examples from no particular world. `parkour` is a worked example of the same template tuned to one corpus, and it shows what tuning is for — on parkour footage filmed at a skate spot, the general prompt returns "skateboarding", "wheelie" and "bicycle stunt", while the tuned one returns vaults and wall runs from the same stills. A prompt is a template because what a caption names decides what can be searched, and that differs per corpus.
 
-**What the index already measures exactly does not belong in a label.** Static-vs-moving, frame rate, duration and date are numbers, held in the motion table and the probe metadata; a caption guessing "static shot" duplicates a measurement and spends words doing it. Those are filters — the label is for what only a reader of the frames can say.
+**What the index already measures exactly does not belong in a label.** Static-vs-moving, frame rate, duration and date are numbers, held in each segment's `motion` value and the probe metadata; a caption guessing "static shot" duplicates a measurement and spends words doing it. Those are filters — the label is for what only a reader of the frames can say.
 
 **To re-evaluate the axes:** write down the queries the new task actually types, before looking at any caption; name the axis each one searches on, since an axis no caption names is a search that cannot work however good the ranker is; then change `PROMPT` and re-caption to a separate `--caption-dir`, so the old set survives as a reference to compare against. Each axis costs two to four words, and a longer label dilutes every term in it. Caption sets written by different prompts are different instruments — re-run a comparison rather than reading across.
 
