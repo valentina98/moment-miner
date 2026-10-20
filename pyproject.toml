@@ -13,6 +13,7 @@ dependencies = [
     "json5>=0.9",
     "lancedb>=0.15",
     "numpy>=1.26",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -34,7 +35,7 @@ mm = "moment_miner.cli:main"
 include = ["moment_miner*"]
 
 [tool.setuptools.package-data]
-moment_miner = ["templates/*.csv", "templates/*.html"]
+moment_miner = ["templates/*.csv", "templates/*.html", "templates/*.yaml"]
 
 # Pyright resolves imports from this venv (types only — dev still runs in Docker).
 # Needed because the dir is `venv/`, not the `.venv/` Pyright auto-detects.

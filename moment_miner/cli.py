@@ -736,5 +736,52 @@ def locate(query, video, labels, videos, fps, locator_name, duration, top_k, bac
         click.echo(f"wrote {on_host(page)} ({len(panels)} panel(s))")
 
 
+def _profile(ctx, param, value):
+    """Make the profile's section for this command the defaults of its options.
+
+    Eager, so it runs before the other options are read: the profile's value
+    then fills any option the command line leaves out.
+    """
+    if value is None:
+        return None
+    from .profiles import load_profile
+
+    try:
+        sections = {name: _profile_section(name, keys)
+                    for name, keys in load_profile(value, ctx.obj).items()}
+    except ValueError as e:
+        raise click.BadParameter(str(e), ctx, param) from e
+    ctx.default_map = sections.get(ctx.info_name, {})
+    return value
+
+
+def _option_names(cmd) -> dict[str, str]:
+    """A command's long option names, as a profile writes them -> parameter names."""
+    return {max(p.opts, key=len).lstrip("-"): p.name for p in cmd.params
+            if isinstance(p, click.Option) and p.name != "profile"}
+
+
+def _profile_section(command: str, keys: dict) -> dict:
+    cmd = main.commands.get(command)
+    if cmd is None or command == "help":
+        raise ValueError(f"profile section {command!r} is not a command; sections are "
+                         + ", ".join(n for n in sorted(main.commands) if n != "help"))
+    names = _option_names(cmd)
+    unknown = sorted(set(keys) - set(names))
+    if unknown:
+        raise ValueError(f"profile section {command!r} has no option {', '.join(unknown)}; "
+                         f"its options are {', '.join(sorted(names))}")
+    return {names[k]: v for k, v in keys.items()}
+
+
+for _name, _cmd in main.commands.items():
+    if _name != "help":
+        _cmd.params.append(click.Option(
+            ["--profile"], is_eager=True, expose_value=False, callback=_profile,
+            help="Take this command's defaults from a profile: a name looked up "
+                 "in DATA_DIR/profiles/, then among the shipped ones, or a .yaml "
+                 "path. Options typed here still win."))
+
+
 if __name__ == "__main__":
     main()
