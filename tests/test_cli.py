@@ -230,7 +230,7 @@ def test_a_deleted_video_is_forgotten_and_the_rest_stay(tmp_path):
     m, folder = _two_indexed(tmp_path)
     (folder / "a.mp4").unlink()
     counts = m.scan(folder)
-    _forget_missing(m, counts, tmp_path / "data", "mock", folder)
+    _forget_missing(m, counts, tmp_path / "data", folder)
     assert counts["removed"] == 1
     assert [r["path"] for r in m.conn.execute("SELECT path FROM videos")] == [
         str((folder / "b.mp4").resolve())]
@@ -242,12 +242,73 @@ def test_every_video_missing_looks_like_a_new_mount_and_removes_nothing(tmp_path
     for p in folder.iterdir():
         p.unlink()
     counts = m.scan(folder)
-    _forget_missing(m, counts, tmp_path / "data", "mock", folder)
+    _forget_missing(m, counts, tmp_path / "data", folder)
     assert counts["removed"] == 0
     assert m.conn.execute("SELECT count(*) FROM videos").fetchone()[0] == 2
 
 
 @requires_ffmpeg
+def _segments_for_two_models(data_dir, m):
+    """A row per indexed video in two models' tables, as two backends leave them."""
+    from moment_miner.store import SegmentStore
+    for backend, dim in (("mock", 4), ("other", 8)):
+        SegmentStore(data_dir, backend).add([
+            {"id": f"{row['id']}:0.0", "video_id": row["id"], "path": row["path"],
+             "t0": 0.0, "t1": 8.0, "text": "", "vector": [1.0] + [0.0] * (dim - 1),
+             "motion": 0.0}
+            for row in m.conn.execute("SELECT id, path FROM videos")])
+
+
+def _paths_in(data_dir, backend):
+    from moment_miner.store import SegmentStore
+    return sorted(r["path"] for r in SegmentStore(data_dir, backend).segments())
+
+
+def test_a_deleted_video_leaves_every_models_table(tmp_path):
+    from moment_miner.cli import _forget_missing
+    m, folder = _two_indexed(tmp_path)
+    _segments_for_two_models(tmp_path / "data", m)
+    (folder / "a.mp4").unlink()
+    _forget_missing(m, m.scan(folder), tmp_path / "data", folder)
+    kept = [str((folder / "b.mp4").resolve())]
+    assert _paths_in(tmp_path / "data", "mock") == kept
+    assert _paths_in(tmp_path / "data", "other") == kept
+
+
+def test_prune_asks_and_removes_what_index_keeps(tmp_path):
+    m, folder = _two_indexed(tmp_path)
+    data_dir = tmp_path / "data"
+    _segments_for_two_models(data_dir, m)
+    for p in folder.iterdir():
+        p.unlink()
+    no = CliRunner().invoke(main, ["--data-dir", str(data_dir), "prune"], input="n\n")
+    assert no.exit_code == 1 and "every indexed video is missing" in no.output
+    assert len(_paths_in(data_dir, "other")) == 2
+    yes = CliRunner().invoke(main, ["--data-dir", str(data_dir), "prune"], input="y\n")
+    assert yes.exit_code == 0, yes.output
+    assert "removed: 2 video(s)" in yes.output
+    assert _paths_in(data_dir, "mock") == _paths_in(data_dir, "other") == []
+    assert m.conn.execute("SELECT count(*) FROM videos").fetchone()[0] == 0
+
+
+def test_prune_keeps_what_is_on_disk_and_stays_inside_its_folder(tmp_path):
+    m, folder = _two_indexed(tmp_path)
+    data_dir = tmp_path / "data"
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    (other / "c.mp4").write_bytes(b"z" * 64)
+    m.scan(other)
+    _segments_for_two_models(data_dir, m)
+    (folder / "a.mp4").unlink()
+    (other / "c.mp4").unlink()
+    result = CliRunner().invoke(main, ["--data-dir", str(data_dir), "prune", str(folder), "--yes"])
+    assert result.exit_code == 0, result.output
+    assert _paths_in(data_dir, "other") == sorted(
+        [str((folder / "b.mp4").resolve()), str((other / "c.mp4").resolve())])
+    again = CliRunner().invoke(main, ["--data-dir", str(data_dir), "prune", str(folder)])
+    assert "nothing to prune" in again.output
+
+
 def test_eval_scores_the_labels_in_the_data_folder_and_names_the_file(tmp_path, synthetic_video):
     data_dir = tmp_path / "mm_data"
 

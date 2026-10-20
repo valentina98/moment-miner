@@ -22,6 +22,13 @@ class SegmentStore:
     def _names(self) -> list[str]:
         return list(self.db.list_tables().tables)
 
+    @staticmethod
+    def backends(data_dir: str | Path) -> list[str]:
+        """Every backend with a table here, so a removal reaches each model's rows."""
+        db = lancedb.connect(str(writable(Path(data_dir) / "lance")))
+        return [n[len("segments_"):] for n in db.list_tables().tables
+                if n.startswith("segments_")]
+
     @property
     def table(self):
         if self.table_name not in self._names():

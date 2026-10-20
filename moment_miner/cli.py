@@ -85,7 +85,7 @@ def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex, es
     if reindex:
         manifest.reset(folder)
     be = get_backend(backend)
-    _forget_missing(manifest, counts, data_dir, be.name, folder)
+    _forget_missing(manifest, counts, data_dir, folder)
     click.echo(f"scan: {counts}")
     settings = index_settings(be.name, window, stride)
     _report_stale_elsewhere(manifest, settings, folder)
@@ -147,7 +147,7 @@ def calibrate(data_dir, video, backend):
     run(data_dir, get_backend(backend), video, log=click.echo)
 
 
-def _forget_missing(manifest, counts, data_dir, backend_name, folder):
+def _forget_missing(manifest, counts, data_dir, folder):
     """Drop videos whose file is gone, unless every one under FOLDER is gone.
 
     All of them missing at once is what a different mount root looks like,
@@ -160,17 +160,29 @@ def _forget_missing(manifest, counts, data_dir, backend_name, folder):
     known = counts["unchanged"] + counts["changed"] + len(missing)
     if len(missing) == known:
         click.echo(f"kept: all {len(missing)} indexed video(s) under {on_host(folder)} are "
-                   "missing -- a different mount root? Nothing removed.")
+                   "missing -- a different mount root? Nothing removed; `mm prune` "
+                   "removes them after asking.")
         return
-    stores = [SegmentStore(data_dir, backend_name), AxisStore(data_dir)]
+    _drop_videos(manifest, data_dir, missing)
     for path in missing:
+        click.echo(f"removed: {on_host(path)} (file no longer on disk)")
+    counts["removed"] = len(missing)
+
+
+def _drop_videos(manifest, data_dir, paths):
+    """Remove these videos' rows for every model, their axes and their manifest
+    entries. The caption cache keeps their captions, so a video that comes back
+    is not captioned twice."""
+    stores = [SegmentStore(data_dir, b) for b in SegmentStore.backends(data_dir)]
+    axes = AxisStore(data_dir)
+    for path in paths:
         for store in stores:
             store.delete_path(path)
+        axes.delete_path(path)
         manifest.forget(path)
-        click.echo(f"removed: {on_host(path)} (file no longer on disk)")
-    if stores[0].count():
-        stores[0].rebuild_fts()
-    counts["removed"] = len(missing)
+    for store in stores:
+        if store.count():
+            store.rebuild_fts()
 
 
 def _report_stale_elsewhere(manifest, settings, folder):
@@ -583,6 +595,37 @@ def status(data_dir, show_errors):
     if show_errors:
         for row in manifest.errors():
             click.echo(f"  {on_host(row['path'])}: {row['error']}")
+
+
+@main.command()
+@click.argument("folder", required=False, type=UserPath(file_okay=False))
+@click.option("--yes", is_flag=True, help="Remove them without asking.")
+@click.pass_obj
+def prune(data_dir, folder, yes):
+    """Remove indexed videos whose file is gone, after asking.
+
+    For what `mm index` keeps on purpose: a folder whose videos are all
+    missing at once, which is also what an unplugged drive looks like, and
+    folders never indexed again. Their rows go for every model; their
+    captions stay in the cache. FOLDER limits it to the videos under it.
+    Indexes nothing and deletes no file.
+    """
+    manifest = Manifest(data_dir / "manifest.db")
+    known = manifest.paths(folder)
+    missing = [p for p in known if not Path(p).exists()]
+    if not missing:
+        click.echo(f"nothing to prune: all {len(known)} indexed video(s) are on disk")
+        return
+    for path in missing:
+        click.echo(f"missing: {on_host(path)}")
+    if len(missing) == len(known):
+        click.echo("every indexed video" + (f" under {on_host(folder)}" if folder else "")
+                   + " is missing: an unplugged drive or a different mount looks the same")
+    if not yes:
+        click.confirm(f"Remove these {len(missing)} of {len(known)} video(s) from the index?",
+                      abort=True)
+    _drop_videos(manifest, data_dir, missing)
+    click.echo(f"removed: {len(missing)} video(s); their captions stay in the cache")
 
 
 @main.command(
