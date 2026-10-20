@@ -41,7 +41,7 @@ $ mm cut ~/.mm_data/cuts/athlete-performs-a-kong-vault_<timestamp>/video_001-ath
 | `mm index FOLDER` | scan recursively, index new, changed and previously failed videos under FOLDER and any whose segment geometry changed, drop videos no longer on disk; other folders are only reported, never touched; prints an ETA first; never captions (`--reindex`, `--no-asr`, `--backend`, `--no-estimate`) |
 | `mm calibrate VIDEO` | measure this machine's index speed on the first 24 s of VIDEO, for the ETA; `mm index` runs it by itself the first time. On a 4K 50 fps CPU box it reads 8–15% above the full-run rate, so the ETA errs long |
 | `mm search QUERY` | ranked timestamps, each widened by `--pad`, and one LosslessCut project per video; cuts nothing (`-k`, `-o`, `--pad`, `--json`, `--static`/`--moving`, `--static-max`) |
-| `mm cut PROJECT.llc…` | every segment of each project as a lossless clip, exactly as the project says, from `mm search` or saved in LosslessCut; a failed or taken clip does not stop the rest (`-o`, `--no-smart`) |
+| `mm cut PROJECT.llc…` | every segment of each project as a lossless clip, exactly as the project says, from `mm search` or saved in LosslessCut; a failed or taken clip does not stop the rest (`-o`, `--no-smart`, `--re-encode` with `--size`, `--codec`, `--crf`, `--fps`, `--no-audio`) |
 | `mm locate -q Q -v VIDEO` | where inside one video the action is (`--labels`/`--videos` to sweep a CSV, `--fps`, `--locator`, `--duration`, `-k`, `-o`) |
 | `mm annotate FOLDER` | interactive ground-truth labeling (`--template`) |
 | `mm eval` | recall@k + MRR against hand labels (`--labels`, default `<data-dir>/labels.csv`) |
@@ -121,12 +121,17 @@ A stream copy can only begin on a keyframe, so cutting by copy alone snaps the s
 |---|---|---|---|
 | default (smart) | **1.200 s exact** | 1.808 s | decodes bit-identically to source |
 | `--no-smart` | 1.000 s | 2.122 s | whole clip byte-identical |
+| `--re-encode` | **1.200 s exact** | 1.808 s | whole clip encoded again |
 
 Boundary GOPs are recoded at `NEAR_LOSSLESS` (CRF 3). Verify start accuracy by pixel alignment on the copied interior, never by duration alone — a clip can be several frames out and still have a plausible duration, which is exactly how an earlier hand-rolled version passed its own tests while cutting four frames early.
 
 `--no-smart` remains available and is the faster, fully byte-identical path when a keyframe-aligned start is good enough.
 
 **Dependency note:** smartcut is an optional extra (`pip install -e ".[smartcut]"`, pinned to `1.7`). The package was deprecated in February 2026 but is MIT, pure Python, and depends only on PyAV; if a future PyAV breaks it, vendoring the four modules used here is the escape hatch. Core `mm index` / `mm search` never pull it in.
+
+## Changing the clip: `--re-encode`
+
+`--re-encode` is for a clip that has to change: a smaller frame (`--size 1920x1080`), another codec (`--codec h264` for phones and the web, `h265` smaller, `prores` for editing, written as `.mov`), a frame rate (`--fps`), or no sound (`--no-audio`). Each setting left out keeps the source's own; the bitrate too, unless `--crf` sets a constant quality instead (lower is better and bigger, 18 looks lossless). Timecode and creation time are kept, the timecode moved on to the clip's first frame. On the 1.2–3.0 s cut above it gives 90 frames, the first and last equal to source frames 60 and 149, at 1.2× the source's bitrate. It is slow: those 1.8 s of 4K took 40 s on a laptop CPU.
 
 ## Finding the cut: `mm locate`
 

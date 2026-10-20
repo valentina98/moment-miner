@@ -122,7 +122,7 @@ def _fake_cuts(monkeypatch, fail_at=()):
     so the loop around it is tested without ffmpeg."""
     calls = []
 
-    def fake(path, start, end, out, smart=True, prefix=""):
+    def fake(path, start, end, out, smart=True, prefix="", encode=None):
         calls.append((start, end, prefix))
         if start in fail_at:
             raise RuntimeError("ffmpeg export failed: boom")
@@ -158,7 +158,7 @@ def test_cut_continues_past_a_failed_segment(tmp_path, monkeypatch):
 def test_cut_records_a_taken_name_and_goes_on(tmp_path, monkeypatch):
     _fake_cuts(monkeypatch)
 
-    def taken_first(path, start, end, out, smart=True, prefix=""):
+    def taken_first(path, start, end, out, smart=True, prefix="", encode=None):
         if start == 1.5:
             raise NameTaken(os.path.join(out, "02_taken.mp4"))
         return os.path.join(out, "x"), start, end

@@ -390,21 +390,47 @@ def search(data_dir, query, k, backend, as_json, output, pad, static, static_max
               help="Frame-accurate cuts, recoding only the frames between each "
                    "cut and its nearest keyframe. --no-smart copies without "
                    "recoding and starts at the keyframe before (up to ~1 s early).")
+@click.option("--re-encode", "re_encode", is_flag=True,
+              help="Encode each whole clip again, exact at both ends. Every "
+                   "setting below defaults to the source's own; timecode and "
+                   "creation time are kept.")
+@click.option("--size", default=None, callback=lambda c, p, v: v and _frame_size(c, p, v),
+              help="With --re-encode: frame size WxH, e.g. 1920x1080.")
+@click.option("--codec", default=None, type=click.Choice(["h264", "h265", "prores"]),
+              help="With --re-encode: h264 for phones and the web, h265 smaller, "
+                   "prores for editing (written as .mov).")
+@click.option("--crf", default=None, type=click.IntRange(0, 51),
+              help="With --re-encode: ffmpeg's constant quality, lower is better "
+                   "and bigger (18 looks lossless). Without it the clip aims at the "
+                   "source's bitrate. Not for prores.")
+@click.option("--fps", default=None, type=click.FloatRange(min=0, min_open=True),
+              help="With --re-encode: frame rate.")
+@click.option("--no-audio", "no_audio", is_flag=True, help="With --re-encode: drop the sound.")
 @click.pass_obj
-def cut(data_dir, projects, output, smart):
+def cut(data_dir, projects, output, smart, re_encode, size, codec, crf, fps, no_audio):
     """Cut every segment of each LosslessCut PROJECT (.llc) into a clip,
     exactly as the project says: one written by `mm search` or saved in
     LosslessCut. A segment ranked by `mm search` gets its rank in front of
     the clip's name. A taken name or a failed cut does not stop the rest."""
-    from .export import cut_project
+    from .export import Encode, cut_project
 
+    encode = None
+    if re_encode:
+        if not smart:
+            raise click.UsageError("--re-encode and --no-smart are two different cuts; pick one")
+        if codec == "prores" and crf is not None:
+            raise click.UsageError("prores has no --crf; leave it out")
+        encode = Encode(size=size, codec=codec, crf=crf, fps=fps, audio=not no_audio)
+    elif any(v not in (None, False) for v in (size, codec, crf, fps, no_audio)):
+        raise click.UsageError("--size, --codec, --crf, --fps and --no-audio need --re-encode")
     if output:
         guard.output(output)
     manifest = Manifest(data_dir / "manifest.db")
     taken, failed = [], []
     for project in projects:
         out_dir = output or _cut_dir(data_dir, Path(project).stem)
-        written, project_taken, project_failed = cut_project(project, out_dir, smart=smart)
+        written, project_taken, project_failed = cut_project(project, out_dir, smart=smart,
+                                                             encode=encode)
         for out, video, a0, a1 in written:
             manifest.add_export(out)
             click.echo(f"{on_host(out)}  <- {on_host(video)} {fmt_ts(a0)} - {fmt_ts(a1)}")

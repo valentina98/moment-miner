@@ -2,6 +2,7 @@ import json
 import os
 import re
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 
 import click
@@ -39,6 +40,23 @@ def clip_name(path: str | Path, start: float, end: float, prefix: str = "") -> s
     return f"{prefix}{video.stem}-{_lc_time(start)}-{_lc_time(end)}{video.suffix}"
 
 
+# What --codec takes, and the encoder each one uses.
+ENCODERS = {"h264": "libx264", "h265": "libx265", "prores": "prores_ks"}
+_SOURCE_CODEC = {"h264": "h264", "hevc": "h265", "prores": "prores"}
+# prores_ks profile numbers by the name ffprobe gives a ProRes source's profile.
+_PRORES_PROFILES = {"Proxy": 0, "LT": 1, "Standard": 2, "HQ": 3, "4444": 4, "4444 XQ": 5}
+
+
+@dataclass(frozen=True)
+class Encode:
+    """A full re-encode. A field left at None keeps the source's own value."""
+    size: tuple[int, int] | None = None
+    codec: str | None = None
+    crf: int | None = None
+    fps: float | None = None
+    audio: bool = True
+
+
 def export_clip(
     path: str,
     start: float,
@@ -46,6 +64,7 @@ def export_clip(
     out: str,
     smart: bool = True,
     prefix: str = "",
+    encode: Encode | None = None,
 ) -> tuple[str, float, float]:
     """Cut [start, end] of `path` into a clip, exactly; no margin is added.
     Returns (out, actual_start, actual_end).
@@ -62,11 +81,23 @@ def export_clip(
     so the file is byte-identical to the source but may begin up to one GOP
     early. Use it when the extra footage does not matter and speed does, or
     where the smartcut extra is unavailable.
+
+    `encode` re-encodes the whole clip instead, exactly at both ends; a
+    ProRes clip is written as `.mov`, since MP4 cannot hold ProRes.
     """
-    if not smart:
+    source, codec = None, None
+    if encode:
+        source = probe(path)
+        codec = encode.codec or _SOURCE_CODEC.get(source["codec"])
+        if codec is None:
+            raise RuntimeError(f"cannot re-encode to the source's codec {source['codec']!r}; "
+                               f"name one: --codec {' / '.join(ENCODERS)}")
+    elif not smart:
         start = keyframe_before(path, start)
     if Path(out).is_dir():
         out = str(Path(out) / clip_name(path, start, end, prefix))
+        if codec == "prores":
+            out = str(Path(out).with_suffix(".mov"))
     if Path(out).exists():
         raise NameTaken(out)
     writable(out)
@@ -74,7 +105,9 @@ def export_clip(
     # kill or Ctrl+C never leaves a truncated clip that looks like a result.
     part = str(Path(out).with_name(PARTIAL + Path(out).name))
     try:
-        if smart:
+        if encode:
+            _reencode(path, start, end, part, encode, source, codec)
+        elif smart:
             smart_cut(path, start, end, part)
         else:
             _stream_copy(path, start, end, part)
@@ -154,6 +187,60 @@ def smart_cut(path: str, start: float, end: float, out: str) -> None:
         raise RuntimeError(f"smart cut failed: {failure}") from failure
 
 
+def _reencode(path: str, start: float, end: float, out: str, encode: Encode,
+              source: dict, codec: str) -> None:
+    """The clip encoded again with ffmpeg, from the exact start frame.
+
+    Seeking before the input decodes from the keyframe before `start` and
+    drops what precedes it, so both ends are exact. Without --crf the clip
+    targets the source's bitrate, the one setting a constant-quality scale
+    cannot copy. Audio is copied, not re-encoded.
+    """
+    cmd = [ffmpeg_exe(), "-y", "-v", "error", "-ss", f"{start:.3f}", "-i", path,
+           "-t", f"{end - start:.3f}", "-map", "0:v:0"]
+    cmd += ["-map", "0:a?", "-c:a", "copy"] if encode.audio else ["-an"]
+    cmd += ["-c:v", ENCODERS[codec]]
+    if codec == "prores":
+        cmd += ["-profile:v", str(_PRORES_PROFILES.get(source.get("profile"), 3))]
+    elif encode.crf is not None:
+        cmd += ["-crf", str(encode.crf)]
+    elif source.get("bit_rate"):
+        cmd += ["-b:v", str(source["bit_rate"])]
+    if encode.size:
+        cmd += ["-vf", "scale={}:{}".format(*encode.size)]
+    if encode.fps:
+        cmd += ["-r", f"{encode.fps:g}"]
+    cmd += ["-map_metadata", "0"]
+    if source.get("timecode") and source.get("fps"):
+        cmd += ["-timecode", shift_timecode(source["timecode"], source["fps"], start)]
+    result = ffbin.run_while_growing(cmd + [out], out, text=True)
+    if result.returncode != 0 or not os.path.isfile(out):
+        raise RuntimeError(f"ffmpeg re-encode failed: {result.stderr.strip()}")
+
+
+def shift_timecode(timecode: str, fps: float, seconds: float) -> str:
+    """`timecode` moved on by `seconds`, so a clip starts at the timecode its
+    first frame had in the source. A `;` marks drop-frame (29.97 / 59.94),
+    which skips frame numbers 0 and 1 (0-3 at 59.94) every minute except
+    every tenth; the result keeps the source's form."""
+    rate = round(fps)
+    drop = ";" in timecode
+    h, m, s, f = (int(x) for x in re.split(r"[:;.]", timecode))
+    skip = round(rate / 15) if drop else 0
+    minutes = 60 * h + m
+    frames = (3600 * h + 60 * m + s) * rate + f - skip * (minutes - minutes // 10)
+    frames += round(seconds * fps)
+    if drop:
+        per_10 = rate * 600 - skip * 9
+        tens, rest = divmod(frames, per_10)
+        frames += skip * 9 * tens + (skip * ((rest - skip) // (rate * 60 - skip)) if rest > skip else 0)
+    f = frames % rate
+    s = frames // rate % 60
+    m = frames // (rate * 60) % 60
+    h = frames // (rate * 3600) % 24
+    return f"{h:02d}:{m:02d}:{s:02d}{';' if drop else ':'}{f:02d}"
+
+
 def write_llc_projects(hits: list[dict], out_dir: str | Path,
                        query: str) -> tuple[list[str], list[str]]:
     """One LosslessCut project per video, `<video>-<query>.llc`, its hits as
@@ -219,7 +306,8 @@ def read_project(project: str | Path) -> tuple[str, list[tuple[float, float | No
     return video, segments
 
 
-def cut_project(project: str | Path, out_dir: str | Path, smart: bool = True):
+def cut_project(project: str | Path, out_dir: str | Path, smart: bool = True,
+                encode: Encode | None = None):
     """Cut every segment of a project into `out_dir`, exactly as it is.
 
     A segment whose name ends in a rank (`kong vault? #2`) gets it in front,
@@ -243,7 +331,7 @@ def cut_project(project: str | Path, out_dir: str | Path, smart: bool = True):
             if end <= start:
                 raise ValueError(f"segment ends at {end:.3f} s, before its start")
             out, a0, a1 = export_clip(video, start, end, str(target), smart=smart,
-                                      prefix=prefix)
+                                      prefix=prefix, encode=encode)
             written.append((out, video, a0, a1))
         except NameTaken as e:
             taken.append(e.path)
