@@ -3,6 +3,8 @@ from pathlib import Path
 import lancedb
 import numpy as np
 from lancedb.index import FTS
+from lancedb.query import MatchQuery
+from lancedb.rerankers import RRFReranker
 
 from .guard import writable
 
@@ -36,7 +38,7 @@ class SegmentStore:
             r["vector"] = np.asarray(r["vector"], dtype=np.float32)
         if self.table_name in self._names():
             # The same file reached under two mount roots fingerprints alike, so
-            # its rows share an id and rrf_fuse would credit that id twice.
+            # its rows share an id and search would return the moment twice.
             (
                 self.db.open_table(self.table_name)
                 .merge_insert("id")
@@ -65,21 +67,27 @@ class SegmentStore:
     def rebuild_fts(self):
         self.table.create_index("text", config=FTS(), replace=True)
 
-    def vector_search(self, vec: np.ndarray, k: int = 50) -> list[dict]:
-        return (
-            self.table.search(np.asarray(vec, dtype=np.float32))
-            .limit(k).select([*COLUMNS, "_distance"]).to_list()
+    def search(self, vec: np.ndarray, query: str, k: int = 50,
+               where: str | None = None) -> list[dict]:
+        """The `k` best of the vector and full-text rankings fused by
+        reciprocal rank (K=60), as `score`. `where` filters both rankings
+        before they are cut to `k`."""
+        q = (
+            self.table.search(query_type="hybrid")
+            .vector(np.asarray(vec, dtype=np.float32))
+            # Matches the words. A plain string would be parsed, so a quoted
+            # phrase fails for want of token positions, and it needs a
+            # full-text index; this scans rows no index covers yet.
+            .text(MatchQuery(query, "text"))
+            .rerank(RRFReranker())
+            .limit(k)
         )
-
-    def text_search(self, query: str, k: int = 50) -> list[dict]:
-        try:
-            return (
-                self.table.search(query, query_type="fts")
-                .limit(k).select([*COLUMNS, "_score"]).to_list()
-            )
-        except Exception:
-            # No FTS index yet, or query contains no indexable terms.
-            return []
+        if where:
+            q = q.where(where)
+        # No select(): naming the columns makes lance warn on every query that
+        # the rankings' own score columns were left out.
+        return [dict({c: r[c] for c in COLUMNS}, score=r["_relevance_score"])
+                for r in q.to_list()]
 
     def count(self) -> int:
         if self.table_name not in self._names():
@@ -90,10 +98,10 @@ class SegmentStore:
 class AxisStore:
     """The caption's axes, one row per segment.
 
-    Its own table for the same reason as `MotionStore`: the axes are a property
-    of the captions, not of the embedding, so keeping them in
-    `segments_<backend>` would store them once per backend and make adding an
-    axis rewrite the table holding the vectors. Here an axis can be added,
+    Its own table: the axes are a property of the captions, not of the
+    embedding, so keeping them in `segments_<backend>` would store them once
+    per backend and make adding an axis rewrite the table holding the
+    vectors. Here an axis can be added,
     recomputed or dropped on its own, and no re-index is needed to gain one.
 
     The joined caption still goes into the segment row's `text`, because that
@@ -145,57 +153,3 @@ class AxisStore:
         )
         return {r["id"]: {k: r[k] for k in AXIS_COLUMNS} for r in rows}
 
-
-class MotionStore:
-    """How much each segment's frame content changes, 0.0 to 1.0.
-
-    Its own table, deliberately. The value is a property of the decoded frames,
-    not of the embedding, so it does not belong in `segments_<backend>` -- kept
-    there it is recomputed and stored once per backend, and adding or dropping
-    the tag rewrites the table holding the vectors. Here it is written once,
-    shared by every backend, and can be dropped or recomputed on its own.
-
-    The threshold is *not* stored. `moving_fraction` is the measurement and
-    "static" is a judgement about it, so the cut belongs at query time where it
-    can be retuned for free -- `motion.py` calls 0.35 a good default rather
-    than a constant of nature, and baking it in made retuning cost a re-index.
-    """
-
-    TABLE = "motion"
-
-    def __init__(self, data_dir: str | Path):
-        self.db = lancedb.connect(str(writable(Path(data_dir) / "lance")))
-
-    def _exists(self) -> bool:
-        return self.TABLE in list(self.db.list_tables().tables)
-
-    def add(self, rows: list[dict]):
-        if not rows:
-            return
-        if self._exists():
-            (
-                self.db.open_table(self.TABLE)
-                .merge_insert("id")
-                .when_matched_update_all()
-                .when_not_matched_insert_all()
-                .execute(rows)
-            )
-        else:
-            self.db.create_table(self.TABLE, rows)
-
-    def delete_path(self, path: str):
-        if self._exists():
-            self.db.open_table(self.TABLE).delete(
-                "path = '{}'".format(path.replace("'", "''")))
-
-    def get(self, ids: list[str]) -> dict[str, float]:
-        """Motion by segment id. Ids with no row are simply absent."""
-        if not ids or not self._exists():
-            return {}
-        quoted = ", ".join("'{}'".format(i.replace("'", "''")) for i in ids)
-        rows = (
-            self.db.open_table(self.TABLE)
-            .search().where(f"id IN ({quoted})").limit(len(ids))
-            .to_list()
-        )
-        return {r["id"]: r["motion"] for r in rows}

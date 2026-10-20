@@ -12,10 +12,10 @@ close-up filling the frame the same way, and that is the known limit.
 Computed from the frames the embedding pass already decoded, so it costs one
 array subtraction per segment and no extra ffmpeg work. That is the only reason
 it is measured inside `index_pending` at all: extraction is ~20% of index time,
-and a separate pass would pay it twice. The *value* goes to its own `motion`
-table (`store.MotionStore`), never into `segments_<backend>` -- it does not
-depend on the embedding, and keeping it there stored it once per backend and
-made adding or dropping the tag a schema change on the vectors.
+and a separate pass would pay it twice. The *value* is stored on the segment's
+row in `segments_<backend>`, so `--static`/`--moving` filters inside the search
+query itself. It does not depend on the embedding, so the price is one copy per
+backend, and adding or dropping the tag is a schema change on the vectors.
 
 **Calibrated 2026-09-06 on 29 full-length windows across both corpora.** Cut
 clips (`footage/cuts/`, 19 windows) are almost all locked-off: 17 score 0.011

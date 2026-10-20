@@ -20,7 +20,7 @@ from .guard import WriteRefused
 from .manifest import Manifest
 from .motion import moving_fraction
 from .probe import probe
-from .store import AxisStore, MotionStore, SegmentStore
+from .store import AxisStore, SegmentStore
 
 DEFAULT_WIN = 8.0
 DEFAULT_STRIDE = 4.0
@@ -106,7 +106,6 @@ def index_pending(
     caption_backend: CaptionBackend | None = None,
     data_dir=None,
     caption_dir=None,
-    motion_store: MotionStore | None = None,
     axis_store: AxisStore | None = None,
     caption_frames: int | None = None,
     caption_frames_short: int | None = None,
@@ -154,7 +153,7 @@ def index_pending(
             if caption_backend is not None:
                 cache = open_captions(data_dir, vid, caption_dir)
                 cache.check_writable()
-            rows, motion_rows = [], []
+            rows = []
             unreadable = 0
             spans = windows(duration, win, stride)
             for t0, t1, frames in extract_windows(
@@ -185,12 +184,9 @@ def index_pending(
                     "t1": t1,
                     "text": text,
                     "vector": backend.embed_segment(frames),
-                })
-                # Measured here because the frames are already decoded;
-                # extraction is ~20% of index time and a second pass would
-                # pay it again. Only the raw value is kept -- see MotionStore.
-                motion_rows.append({
-                    "id": seg_id, "path": path, "t0": t0, "t1": t1,
+                    # Measured here because the frames are already decoded;
+                    # extraction is ~20% of index time and a second pass
+                    # would pay it again. Only the raw value is kept.
                     "motion": moving_fraction(frames),
                 })
             if not rows:
@@ -220,9 +216,6 @@ def index_pending(
                         row["text"] = f"{row['text']} {joined(stored[row['id']])}".strip()
             store.delete_path(path)
             store.add(rows)
-            if motion_store is not None:
-                motion_store.delete_path(path)
-                motion_store.add(motion_rows)
             manifest.mark_done(path, duration, settings)
             counts["indexed"] += 1
             counts["segments"] += len(rows)
