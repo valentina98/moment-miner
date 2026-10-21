@@ -18,7 +18,7 @@ Pull-ups
 
 ## Why it scores one axis
 
-A caption carries four axes and a query constrains only the ones it names. Two of the four — `scene` and `light` — are clip-level, so every window of a clip repeats them; scoring the joined caption drowns the one part that varies. `--axis action` compares like with like. Measured on a 131-segment corpus: mean word overlap between windows of the same clip is 0.44 for the whole caption and 0.24 for the action alone.
+A caption carries five axes and a query constrains only the ones it names. Two of the five — `scene` and `light` — are clip-level, so every window of a clip repeats them; scoring the joined caption drowns the one part that varies. `--axis action` compares like with like. Measured on a 131-segment corpus: mean word overlap between windows of the same clip is 0.44 for the whole caption and 0.24 for the action alone.
 
 ## The rankers
 
