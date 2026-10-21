@@ -186,7 +186,7 @@ def test_a_reindex_keeps_the_stored_captions(tmp_path, synthetic_video):
 
 # cli spec rule 2: one name per option. These are the names it replaced.
 RETIRED = {"--out", "--llc-dir", "--llc", "--top", "--caption"}
-WRITES_RESULTS = {"search", "cut", "caption-compare", "locate"}
+WRITES_RESULTS = {"search", "cut", "caption-compare", "caption-export", "locate"}
 
 
 def test_every_option_has_one_name_for_one_thing():

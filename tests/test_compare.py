@@ -7,19 +7,16 @@ from moment_miner.cli import main
 from moment_miner.compare import agreement, balanced_order, build, tokens
 
 
-def write_captions(path, rows, schema="sidecar"):
-    with path.open("w", newline="") as f:
-        if schema == "sidecar":
-            w = csv.DictWriter(f, fieldnames=["id", "t0", "t1", "caption"], lineterminator="\n")
-        else:
-            w = csv.DictWriter(f, fieldnames=["seg", "caption"], lineterminator="\n")
-        w.writeheader()
-        w.writerows(rows)
+def rows(n, text, video="v"):
+    return [{"id": f"{video}:{i * 4.0}", "video_id": video, "t0": i * 4.0,
+             "t1": i * 4.0 + 8.0, "caption": text(i)} for i in range(n)]
 
 
-def sidecar(n, text):
-    return [{"id": f"s{i}", "t0": i * 4.0, "t1": i * 4.0 + 8.0, "caption": text(i)}
-            for i in range(n)]
+def cache(data_dir, name, n, text):
+    from moment_miner.captions import CaptionCache, parse_axes
+    sc = CaptionCache(data_dir, name)
+    for r in rows(n, text):
+        sc.put(r["id"], r["t0"], r["t1"], parse_axes(r["caption"].replace(",", " ")), "m")
 
 
 # --- the agreement signal -------------------------------------------------
@@ -78,48 +75,30 @@ def test_balanced_order_uses_every_slot_equally():
         assert counts == [6, 6, 6]
 
 
-def test_blind_page_hides_the_file_names(tmp_path):
-    for n in (1, 2):
-        write_captions(tmp_path / f"model{n}.csv", sidecar(6, lambda i: f"caption {n} for {i}"))
-    html, order = build([tmp_path / "model1.csv", tmp_path / "model2.csv"],
-                        blind=True, seed=1, frames=False)
+def test_blind_page_hides_the_set_names():
+    sets = {f"model{n}": rows(6, lambda i, n=n: f"caption {n} for {i}") for n in (1, 2)}
+    html, order = build(sets, blind=True, seed=1, frames=False)
     assert "model1" not in html and "model2" not in html
     assert len(order) == 6
     assert {"A", "B"} <= set(order[0])
 
 
-def test_no_blind_shows_the_file_names(tmp_path):
-    for n in (1, 2):
-        write_captions(tmp_path / f"model{n}.csv", sidecar(6, lambda i: f"caption {n} for {i}"))
-    html, _ = build([tmp_path / "model1.csv", tmp_path / "model2.csv"],
-                    blind=False, frames=False)
+def test_no_blind_shows_the_set_names():
+    sets = {f"model{n}": rows(6, lambda i, n=n: f"caption {n} for {i}") for n in (1, 2)}
+    html, _ = build(sets, blind=False, frames=False)
     assert "model1" in html and "model2" in html
 
 
 # --- inputs ---------------------------------------------------------------
 
-def test_bare_seg_caption_schema_is_accepted(tmp_path):
-    for n in (1, 2):
-        write_captions(tmp_path / f"m{n}.csv",
-                       [{"seg": f"seg{i:02d}", "caption": f"c{n}{i}"} for i in range(6)],
-                       schema="bare")
-    html, order = build([tmp_path / "m1.csv", tmp_path / "m2.csv"], blind=True, frames=False)
-    assert len(order) == 6
-    assert "seg01" in html
+def test_sets_with_no_segment_in_common_are_an_error():
+    with pytest.raises(ValueError, match="captioned in every set"):
+        build({"a": rows(3, lambda i: "x"), "b": rows(3, lambda i: "y", video="w")},
+              frames=False)
 
 
-def test_segments_with_no_overlap_are_an_error(tmp_path):
-    write_captions(tmp_path / "a.csv", sidecar(3, lambda i: "x"))
-    write_captions(tmp_path / "b.csv",
-                   [{"id": f"other{i}", "t0": 0.0, "t1": 8.0, "caption": "y"} for i in range(3)])
-    with pytest.raises(ValueError, match="every caption file"):
-        build([tmp_path / "a.csv", tmp_path / "b.csv"], frames=False)
-
-
-def test_only_segments_present_in_all_files_are_compared(tmp_path):
-    write_captions(tmp_path / "a.csv", sidecar(6, lambda i: "x"))
-    write_captions(tmp_path / "b.csv", sidecar(4, lambda i: "y"))
-    _, order = build([tmp_path / "a.csv", tmp_path / "b.csv"], frames=False)
+def test_only_segments_present_in_every_set_are_compared():
+    _, order = build({"a": rows(6, lambda i: "x"), "b": rows(4, lambda i: "y")}, frames=False)
     assert len(order) == 4
 
 
@@ -127,30 +106,37 @@ def test_only_segments_present_in_all_files_are_compared(tmp_path):
 
 def test_cli_writes_page_and_key(tmp_path):
     for n in (1, 2):
-        write_captions(tmp_path / f"m{n}.csv", sidecar(6, lambda i: f"caption {n} {i}"))
+        cache(tmp_path / "data", f"m{n}", 6, lambda i, n=n: f"caption {n} {i}")
     out = tmp_path / "cmp"
     result = CliRunner().invoke(main, [
-        "caption-compare", str(tmp_path / "m1.csv"), str(tmp_path / "m2.csv"),
+        "--data-dir", str(tmp_path / "data"), "caption-compare", "m1", "m2",
         "-o", str(out), "--seed", "3",
     ])
     assert result.exit_code == 0, result.output
     assert (out / "caption-comparison.html").exists()
     key = out / "caption-comparison-key.csv"
-    assert key.exists()
-    rows = list(csv.DictReader(key.open()))
-    assert len(rows) == 6 and set(rows[0]) == {"seg", "A", "B"}
+    rows_ = list(csv.DictReader(key.open()))
+    assert len(rows_) == 6 and set(rows_[0]) == {"seg", "A", "B"}
+    assert {rows_[0]["A"], rows_[0]["B"]} == {"m1", "m2"}
 
 
 def test_cli_no_blind_writes_no_key(tmp_path):
     for n in (1, 2):
-        write_captions(tmp_path / f"m{n}.csv", sidecar(6, lambda i: f"caption {n} {i}"))
+        cache(tmp_path / "data", f"m{n}", 6, lambda i, n=n: f"caption {n} {i}")
     out = tmp_path / "cmp"
     result = CliRunner().invoke(main, [
-        "caption-compare", str(tmp_path / "m1.csv"), str(tmp_path / "m2.csv"),
+        "--data-dir", str(tmp_path / "data"), "caption-compare", "m1", "m2",
         "-o", str(out), "--no-blind",
     ])
     assert result.exit_code == 0, result.output
     assert [p.name for p in out.iterdir()] == ["caption-comparison.html"]
+
+
+def test_cli_names_a_set_that_is_not_in_the_cache(tmp_path):
+    cache(tmp_path / "data", "m1", 6, lambda i: "x")
+    result = CliRunner().invoke(main, [
+        "--data-dir", str(tmp_path / "data"), "caption-compare", "m1", "nope"])
+    assert result.exit_code != 0 and "no captions in set 'nope'" in result.output
 
 
 def test_frames_dir_is_used_when_the_archive_is_offline(tmp_path):
@@ -160,11 +146,9 @@ def test_frames_dir_is_used_when_the_archive_is_offline(tmp_path):
     stills.mkdir()
     blob = b"\xff\xd8\xff\xdb-stand-in-for-a-jpeg"
     for shot in "abc":
-        (stills / f"s0_clip_{shot}.jpg").write_bytes(blob)
-    for n in (1, 2):
-        write_captions(tmp_path / f"m{n}.csv", sidecar(6, lambda i: f"caption {n} {i}"))
-    html, _ = build([tmp_path / "m1.csv", tmp_path / "m2.csv"],
-                    frames_dir=stills, blind=False)
+        (stills / f"v:0.0_clip_{shot}.jpg").write_bytes(blob)
+    sets = {f"m{n}": rows(6, lambda i, n=n: f"caption {n} {i}") for n in (1, 2)}
+    html, _ = build(sets, frames_dir=stills, blind=False)
     assert html.count(base64.standard_b64encode(blob).decode()) == 3
 
 
@@ -177,18 +161,23 @@ def test_frames_dir_matches_only_its_own_segment(tmp_path):
     assert len(load_frames(stills, "s0")) == 1
 
 
-def test_page_defaults_to_the_data_folder_not_the_footage(tmp_path):
-    archive = tmp_path / "archive"
-    archive.mkdir()
+def test_page_defaults_to_the_data_folder(tmp_path):
     for n in (1, 2):
-        write_captions(tmp_path / f"m{n}.csv", sidecar(6, lambda i: f"caption {n} {i}"))
+        cache(tmp_path / "data", f"m{n}", 6, lambda i, n=n: f"caption {n} {i}")
     result = CliRunner().invoke(main, [
-        "--data-dir", str(tmp_path / "data"),
-        "caption-compare", str(tmp_path / "m1.csv"), str(tmp_path / "m2.csv"),
-        "--videos", str(archive),
-    ])
+        "--data-dir", str(tmp_path / "data"), "caption-compare", "m1", "m2"])
     assert result.exit_code == 0, result.output
     [run] = (tmp_path / "data" / "cuts").glob("caption-compare_*")
     assert sorted(p.name for p in run.iterdir()) == ["caption-comparison-key.csv",
                                                      "caption-comparison.html"]
-    assert not any(archive.iterdir())
+
+
+def test_caption_export_writes_the_set_as_csv(tmp_path):
+    cache(tmp_path / "data", "m1", 3, lambda i: f"caption {i}")
+    result = CliRunner().invoke(main, ["--data-dir", str(tmp_path / "data"),
+                                       "caption-export", "m1", "-o", str(tmp_path / "out")])
+    assert result.exit_code == 0, result.output
+    rows_ = list(csv.DictReader((tmp_path / "out" / "m1.csv").open()))
+    assert [r["id"] for r in rows_] == ["v:0.0", "v:4.0", "v:8.0"]
+    status = CliRunner().invoke(main, ["--data-dir", str(tmp_path / "data"), "status"])
+    assert "captions: 3 in set 'm1'" in status.output

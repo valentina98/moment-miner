@@ -21,7 +21,6 @@ from moment_miner.captions import (
     LIGHTS,
     joined,
     load_prompt,
-    open_captions,
     parse_axes,
     prompt_names,
 )
@@ -112,7 +111,7 @@ def test_no_credentials_raises_naming_both(tmp_path):
     assert "Claude Code" in str(e.value)
 
 
-def test_oauth_route_sends_the_beta_header(tmp_path, monkeypatch):
+def test_oauth_route_sends_the_beta_header_and_a_timeout(tmp_path, monkeypatch):
     (tmp_path / ".credentials.json").write_text(json.dumps(CLAUDE_CREDS))
     captured = {}
 
@@ -129,6 +128,7 @@ def test_oauth_route_sends_the_beta_header(tmp_path, monkeypatch):
     be.client
     assert captured["auth_token"] == "oauth-value"
     assert captured["default_headers"]["anthropic-beta"] == "oauth-2025-04-20"
+    assert captured["timeout"] == 60.0
 
 
 # --- captioning -----------------------------------------------------------
@@ -234,46 +234,56 @@ def test_backend_selection():
 
 # --- the caption cache in the data folder ----------------------------------
 
-def test_cache_lives_in_the_data_folder_keyed_by_video_id(tmp_path):
-    sc = open_captions(tmp_path / "data", "a")
+def test_cache_is_one_db_in_the_data_folder(tmp_path):
+    sc = CaptionCache(tmp_path / "data")
     sc.put("a:0.0", 0.0, 8.0, parse_axes("a caption"), "claude-haiku-4-5")
-    sc.flush()
-    written = tmp_path / "data" / "captions" / "a.csv"
-    rows = list(csv.DictReader(written.open()))
-    assert rows[0]["id"] == "a:0.0"
-    assert rows[0]["action"] == "a caption"
-    assert rows[0]["caption"] == "a caption, unclear, unclear, unclear"
-    assert rows[0]["model"] == "claude-haiku-4-5"
+    assert (tmp_path / "data" / "captions.db").is_file()
+    [row] = sc.rows()
+    assert row["id"] == "a:0.0" and row["video_id"] == "a"
+    assert row["action"] == "a caption"
+    assert row["caption"] == "a caption, unclear, unclear, unclear"
+    assert row["model"] == "claude-haiku-4-5"
 
 
-def test_cache_is_read_back_so_captions_are_not_bought_twice(tmp_path):
-    sc = open_captions(tmp_path / "data", "a")
-    sc.put("a:0.0", 0.0, 8.0, parse_axes("cached"), "claude-haiku-4-5")
-    sc.flush()
-    assert open_captions(tmp_path / "data", "a").get("a:0.0")["action"] == "cached"
-    assert open_captions(tmp_path / "data", "a").get("a:4.0") is None
+def test_a_caption_is_kept_the_moment_it_is_bought(tmp_path):
+    """No flush, no close: a pass killed right after `put` still has it."""
+    CaptionCache(tmp_path / "data").put("a:0.0", 0.0, 8.0, parse_axes("cached"), "m")
+    import sqlite3
+    other = sqlite3.connect(str(tmp_path / "data" / "captions.db"))
+    assert other.execute("SELECT action FROM captions").fetchall() == [("cached",)]
+    assert CaptionCache(tmp_path / "data").get("a:0.0")["action"] == "cached"
+    assert CaptionCache(tmp_path / "data").get("a:4.0") is None
 
 
-def test_caption_dir_override(tmp_path):
-    out = tmp_path / "elsewhere"
-    sc = open_captions(tmp_path / "data", "a", caption_dir=out)
-    sc.put("a:0.0", 0.0, 8.0, parse_axes("c"), "m")
-    sc.flush()
-    assert (out / "captions.csv").exists()
-    assert not (tmp_path / "data").exists()
+def test_caption_sets_are_kept_apart(tmp_path):
+    CaptionCache(tmp_path / "data").put("a:0.0", 0.0, 8.0, parse_axes("one"), "m")
+    trial = CaptionCache(tmp_path / "data", "trial")
+    assert trial.get("a:0.0") is None
+    trial.put("a:0.0", 0.0, 8.0, parse_axes("two"), "m")
+    assert CaptionCache(tmp_path / "data").get("a:0.0")["action"] == "one"
+    assert trial.sets() == [("default", 1), ("trial", 1)]
 
 
-def test_check_writable_fails_before_spending(tmp_path, monkeypatch):
+def test_an_exported_set_has_every_column_but_the_set(tmp_path):
+    sc = CaptionCache(tmp_path / "data", "trial")
+    for t0 in (4.0, 0.0):
+        sc.put(f"a:{t0}", t0, t0 + 8, parse_axes(f"at {t0}"), "m")
+    assert sc.export(tmp_path / "trial.csv") == 2
+    rows = list(csv.DictReader((tmp_path / "trial.csv").open()))
+    assert [r["id"] for r in rows] == ["a:0.0", "a:4.0"]
+    assert list(rows[0]) == ["id", "video_id", "t0", "t1", "action", "who", "scene",
+                             "light", "caption", "model", "written"]
+
+
+def test_an_unwritable_cache_fails_before_spending(tmp_path, monkeypatch):
     """Tests run as root in the container, where a 0o500 dir is no barrier —
     so raise the OSError a read-only mount would raise."""
-    sc = CaptionCache(tmp_path / "captions.csv")
-
     def read_only(*a, **k):
         raise OSError("Read-only file system")
 
     monkeypatch.setattr(Path, "mkdir", read_only)
     with pytest.raises(RuntimeError, match="cannot write captions"):
-        sc.check_writable()
+        CaptionCache(tmp_path / "data")
 
 
 # --- the indexer path -----------------------------------------------------
@@ -306,7 +316,7 @@ def test_indexing_never_captions(tmp_path, monkeypatch):
     counts = indexer.index_pending(M(), store, E(), use_asr=False, log=lambda *a: None)
     assert "captioned" not in counts
     assert all(r["text"] == "spoken words" for r in store.rows)
-    assert not (tmp_path / "captions.csv").exists()
+    assert not (tmp_path / "captions.db").exists()
 
 
 # --- the standalone pass over an existing index ---------------------------
@@ -371,8 +381,52 @@ def test_caption_pass_over_an_existing_index(tmp_path, synthetic_video):
     assert {r["id"]: list(map(float, r["vector"])) for r in rows} == before
     assert {h["id"] for h in _fts(store, "kong")} == set(before)
     vid = next(iter(before)).split(":")[0]
-    cache = open_captions(tmp_path / "data", vid)
+    cache = CaptionCache(tmp_path / "data")
     assert all(cache.get(i)["action"] == "kong vault over a rail" for i in before)
+
+
+@requires_ffmpeg
+def test_a_caption_request_that_never_answers_fails_its_video_not_the_pass(
+        tmp_path, synthetic_video, monkeypatch):
+    import socket
+    import threading
+
+    from moment_miner import captions
+    from moment_miner.indexer import caption_indexed
+
+    manifest, store = _indexed(tmp_path, synthetic_video)
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen()
+    held = []
+    stop = threading.Event()
+
+    def accept_and_say_nothing():
+        server.settimeout(0.2)
+        while not stop.is_set():
+            try:
+                held.append(server.accept()[0])
+            except socket.timeout:
+                pass
+
+    thread = threading.Thread(target=accept_and_say_nothing, daemon=True)
+    thread.start()
+    (tmp_path / ".credentials.json").write_text(json.dumps(CLAUDE_CREDS))
+    monkeypatch.setattr(captions, "REQUEST_TIMEOUT_S", 0.5)
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", f"http://127.0.0.1:{server.getsockname()[1]}")
+    be = ClaudeCaptionBackend("claude-haiku-4-5", env={"CLAUDE_CONFIG_DIR": str(tmp_path)})
+    try:
+        counts = caption_indexed(manifest, store, be, synthetic_video.parent,
+                                 frame_w=200, frame_h=120, data_dir=tmp_path / "data",
+                                 log=lambda *a: None)
+    finally:
+        stop.set()
+        thread.join()
+        for c in held:
+            c.close()
+        server.close()
+    assert counts["errors"] == 1 and counts["captioned"] == 0
+    assert held, "the request never reached the server"
 
 
 @requires_ffmpeg
@@ -415,15 +469,15 @@ def test_mm_caption_cli(tmp_path, synthetic_video):
     from moment_miner.cli import main
 
     _indexed(tmp_path, synthetic_video)
-    out = tmp_path / "captions-out"
     result = CliRunner().invoke(main, [
         "--data-dir", str(tmp_path / "data"), "caption", str(synthetic_video.parent),
         "--model", "mock", "--backend", "mock", "--frame-size", "200x120",
-        "--caption-dir", str(out), "--caption-frames", "3",
+        "--caption-set", "trial", "--caption-frames", "3",
     ])
     assert result.exit_code == 0, result.output
     assert "'captioned': 2" in result.output
-    rows = list(csv.DictReader((out / "captions.csv").open()))
+    rows = CaptionCache(tmp_path / "data", "trial").rows()
+    assert CaptionCache(tmp_path / "data").rows() == []
     assert [r["caption"] for r in rows] == [
         "mock caption of 3 frames, one person, over 8.0s, daylight"] * 2
 
@@ -431,6 +485,10 @@ def test_mm_caption_cli(tmp_path, synthetic_video):
         "--data-dir", str(tmp_path / "data"), "caption", str(synthetic_video.parent),
         "--model", "mock", "--backend", "mock", "--frame-size", "wide"])
     assert bad.exit_code != 0 and "WxH" in bad.output
+    unsafe = CliRunner().invoke(main, [
+        "--data-dir", str(tmp_path / "data"), "caption", str(synthetic_video.parent),
+        "--model", "mock", "--backend", "mock", "--caption-set", "../x"])
+    assert unsafe.exit_code != 0 and "letters, digits" in unsafe.output
 
 
 def test_shipped_prompts_load_and_differ():
@@ -466,13 +524,13 @@ def test_prompt_comments_are_not_sent_to_the_model():
 
 
 def test_clip_level_axes_are_voted_over_the_clip(tmp_path):
-    sc = CaptionCache(tmp_path / "captions.csv")
+    sc = CaptionCache(tmp_path)
     for i, (scene, light) in enumerate(
             [("a park", "sunny"), ("a park", "sunny"), ("a park", "overcast")]):
         sc.put(f"vid:{i}.0", float(i), float(i) + 8,
                {"action": f"move {i}", "who": "one person",
                 "scene": scene, "light": light}, "mock")
-    sc.vote()
+    sc.vote("vid")
     assert [sc.get(f"vid:{i}.0")["light"] for i in range(3)] == ["sunny"] * 3
     # The window-level axes are untouched.
     assert [sc.get(f"vid:{i}.0")["action"] for i in range(3)] == [
@@ -480,9 +538,9 @@ def test_clip_level_axes_are_voted_over_the_clip(tmp_path):
 
 
 def test_an_abstention_never_wins_the_vote(tmp_path):
-    sc = CaptionCache(tmp_path / "captions.csv")
+    sc = CaptionCache(tmp_path)
     for i, light in enumerate(["unclear", "unclear", "night"]):
         sc.put(f"v:{i}.0", float(i), float(i) + 8,
                {"action": "x", "who": "nobody", "scene": "s", "light": light}, "mock")
-    sc.vote()
+    sc.vote("v")
     assert sc.get("v:0.0")["light"] == "night"

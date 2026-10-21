@@ -10,13 +10,13 @@ Footage without speech leaves that column empty, so the text half of the fusion 
 
 ## Where captions live
 
-`<data-dir>/captions/<video id>.csv`, one file per video. The video id is a fingerprint of the file's content, so a video reached through another mount or after a rename finds its captions. `--caption-dir DIR` keeps a separate caption set in `DIR/captions.csv` instead, one file for every video, which is the shape `mm probe --captions` and `mm caption-compare` read.
+`<data-dir>/captions.db`, one SQLite table for every video, keyed by caption set and segment id. The segment id starts with a fingerprint of the video's content, so a video reached through another mount or after a rename finds its captions. Each caption is committed the moment it is bought, so a pass that stops midway, however it stops, keeps all it paid for. A **caption set** is a name: `mm caption` writes `default` unless `--caption-set NAME` names another, e.g. to try a prompt; `mm caption-compare`, `mm probe --captions` and `mm caption-export` take set names, and `mm status` lists them.
 
 They are separate files on purpose. **Captions are machine-written indexed content; labels are human-checked ground truth.** Scoring captions against labels written by the same model measures agreement, not accuracy, so a caption is never also the label it is scored against.
 
-Columns: `id,t0,t1,action,who,scene,light,caption,model,written`.
+Columns: `caption_set,id,video_id,t0,t1,action,who,scene,light,caption,model,written`. `mm caption-export SET` writes one set as `SET.csv` with the same columns minus `caption_set`, for use outside the tool; nothing in the tool reads CSV captions.
 
-Captions are read back on every pass. `mm caption` buys only segments that don't have one, unless `--force`. `mm index`, `--reindex` included, spends nothing and keeps each segment's stored caption in its searchable text, as long as the segment geometry is unchanged. This is why the cache sits beside the index rather than in it: a caption costs session quota (money only on the API-key route), so re-indexing, a model change or a deleted index never touches `captions/`.
+Captions are read back on every pass. `mm caption` buys only segments that don't have one, unless `--force`. `mm index`, `--reindex` included, spends nothing and keeps each segment's stored caption in its searchable text, as long as the segment geometry is unchanged. This is why the cache sits beside the index rather than in it: a caption costs session quota (money only on the API-key route), so re-indexing, a model change, `mm prune` or a deleted index never touches `captions.db`.
 
 ## The method
 
@@ -49,7 +49,7 @@ Three things are left out on purpose. **Outcome** — clean landing, bail, slip 
 
 **What the index already measures exactly does not belong in a label.** Static-vs-moving, frame rate, duration and date are numbers, held in each segment's `motion` value and the probe metadata; a caption guessing "static shot" duplicates a measurement and spends words doing it. Those are filters — the label is for what only a reader of the frames can say.
 
-**To re-evaluate the axes:** write down the queries the new task actually types, before looking at any caption; name the axis each one searches on, since an axis no caption names is a search that cannot work however good the ranker is; then change `PROMPT` and re-caption to a separate `--caption-dir`, so the old set survives as a reference to compare against. Each axis costs two to four words, and a longer label dilutes every term in it. Caption sets written by different prompts are different instruments — re-run a comparison rather than reading across.
+**To re-evaluate the axes:** write down the queries the new task actually types, before looking at any caption; name the axis each one searches on, since an axis no caption names is a search that cannot work however good the ranker is; then change `PROMPT` and re-caption into a separate `--caption-set`, so the old set survives as a reference to compare against. Each axis costs two to four words, and a longer label dilutes every term in it. Caption sets written by different prompts are different instruments — re-run a comparison rather than reading across.
 
 ## Credentials
 
@@ -97,18 +97,19 @@ make caption VIDEOS=footage/src CAPTION_MODEL=claude-haiku-4-5 ARGS="--force"
 ## Comparing caption sets
 
 ```bash
-mm caption-compare opus.csv sonnet.csv haiku.csv --videos /videos
+mm caption FOLDER --caption-prompt parkour --caption-set parkour
+mm caption-compare default parkour
 ```
 
-Renders one HTML page: each segment's stills, the captions under them, and a mark where the models disagree. Written to `caption-comparison.html` in the data folder, or where `-o` names; `--videos` is only read.
+Renders one HTML page for the segments every set has captioned: each segment's stills, the captions under them, and a mark where the models disagree. Written to `caption-comparison.html` in the data folder, or where `-o` names. A segment's stills are decoded from its video, found through the index, when the file is on disk.
 
-**Blind by default.** Which file wrote which caption is hidden and the column order is shuffled, because you necessarily know which model you launched; the blinding has to happen at judging time. The order is *balanced*, not merely random — every ordering used equally often, so each set sits in each column the same number of times. A free shuffle put one set in the middle column on 10 of 18 segments, which is exactly the position bias the shuffle exists to remove. The decode map is written beside the page as `<name>-key.csv`; leave it shut until every segment is judged. `--no-blind` labels the columns by filename instead.
+**Blind by default.** Which file wrote which caption is hidden and the column order is shuffled, because you necessarily know which model you launched; the blinding has to happen at judging time. The order is *balanced*, not merely random — every ordering used equally often, so each set sits in each column the same number of times. A free shuffle put one set in the middle column on 10 of 18 segments, which is exactly the position bias the shuffle exists to remove. The decode map is written beside the page as `<name>-key.csv`; leave it shut until every segment is judged. `--no-blind` labels the columns by set name instead.
 
 **Disagreement is marked where the captions share no content word at all.** That is a fact about the text rather than a tuned threshold — and on the first real bake-off it marked 9 of 18 segments, where a graded score marked 17 and so said nothing. Words appearing in only one caption are highlighted inline: that is where one model saw a dam wall and another a bridge.
 
 The test is lexical, so it has two known failure directions: a paraphrase ("bails a trick" / "fails a landing") reads as disagreement, and a confident error all the models share reads as agreement. It is a reading aid for a human judging captions, not a metric — nothing in the index depends on it.
 
-`--frames-dir` uses stills already extracted elsewhere, named `<segment id>_*.jpg`, instead of decoding the videos. `--segments` supplies timings when the caption files carry only `seg,caption`.
+`--frames-dir` uses stills already extracted elsewhere, named `<segment id>_*.jpg`, instead of decoding the videos.
 
 ## What captions get wrong
 
