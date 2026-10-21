@@ -171,7 +171,8 @@ def test_a_reindex_keeps_the_stored_captions(tmp_path, synthetic_video):
     from moment_miner.store import AxisStore, SegmentStore
 
     data_dir = _indexed(tmp_path, synthetic_video)
-    axes = {"action": "kong vault", "who": "one person", "scene": "park", "light": "sunny"}
+    axes = {"action": "kong vault", "who": "one person", "scene": "park", "light": "sunny",
+            "things": "rail"}
     AxisStore(data_dir).add([{"id": s["id"], "path": s["path"], "t0": s["t0"], "t1": s["t1"], **axes}
                              for s in SegmentStore(data_dir, "mock").segments()])
     Manifest(data_dir / "manifest.db").reset(synthetic_video.parent)
@@ -181,7 +182,7 @@ def test_a_reindex_keeps_the_stored_captions(tmp_path, synthetic_video):
     assert result.exit_code == 0, result.output
     assert "indexed': 1" in result.output
     texts = {s["text"] for s in SegmentStore(data_dir, "mock").segments()}
-    assert texts == {"kong vault, one person, park, sunny"}
+    assert texts == {"kong vault, one person, park, sunny, rail"}
 
 
 # cli spec rule 2: one name per option. These are the names it replaced.

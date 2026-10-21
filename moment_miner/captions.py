@@ -42,7 +42,10 @@ SHORT_VIDEO_S = 8.0
 LONG_VIDEO_S = 120.0
 FRAME_WIDTH = 640
 
-AXES = ("action", "who", "scene", "light")
+# The one list of axes: the captions table, the axis table, `mm probe --axis`
+# and the searchable text all follow it. `things` is last because it is a list,
+# and the comma fallback hands the last axis whatever is left.
+AXES = ("action", "who", "scene", "light", "things")
 UNKNOWN = "unclear"
 # Closed set: light is a filter, and a filter with synonyms in it misses rows.
 LIGHTS = ("sunny", "overcast", "golden hour", "dusk/dawn", "night", "floodlit",
@@ -60,10 +63,9 @@ REQUEST_TIMEOUT_S = 60.0
 def parse_axes(reply: str) -> dict[str, str]:
     """A model's reply -> one value per axis, never empty.
 
-    JSON is what the shipped prompts ask for, because a named key cannot be
-    mistaken for the one beside it. The comma fallback exists for models that
-    cannot hold a format, and it is positional, so it is the lossy path: a
-    comma inside a value shifts everything after it.
+    The shipped prompts ask for one comma-separated line, read positionally:
+    a comma inside a value shifts everything after it, except in the last
+    axis, which takes the rest of the line. JSON is read by key.
     """
     text = reply.strip()
     # The shipped prompts ask for the comma form, not JSON, because the format
@@ -81,6 +83,8 @@ def parse_axes(reply: str) -> dict[str, str]:
             got = {}
     else:
         parts = [p.strip() for p in text.split(",")]
+        if len(parts) > len(AXES):
+            parts = parts[:len(AXES) - 1] + [", ".join(parts[len(AXES) - 1:])]
         got = dict(zip(AXES, parts))
     axes = {a: str(got.get(a) or UNKNOWN).strip() or UNKNOWN for a in AXES}
     axes["light"] = _light(axes["light"])
@@ -181,7 +185,8 @@ class MockCaptionBackend(CaptionBackend):
                 n_frames: int | None = None, stride: float = 4.0) -> dict[str, str]:
         picked = subsample(frames, span, stride, n_frames)
         return {"action": f"mock caption of {len(picked)} frames",
-                "who": "one person", "scene": f"over {span:.1f}s", "light": "daylight"}
+                "who": "one person", "scene": f"over {span:.1f}s", "light": "daylight",
+                "things": "mock things"}
 
 
 def sample_points(span: float, stride: float) -> list[float]:
@@ -414,18 +419,16 @@ CAPTIONS_DB = "captions.db"
 DEFAULT_SET = "default"
 EXPORT_COLUMNS = ["id", "video_id", "t0", "t1", *AXES, "caption", "model", "written"]
 
-_SCHEMA = """
+_AXIS_LIST = ", ".join(AXES)
+_AXIS_COLUMNS = "".join(f"    {a} TEXT NOT NULL,\n" for a in AXES)
+_SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS captions (
     caption_set TEXT NOT NULL,
     id TEXT NOT NULL,
     video_id TEXT NOT NULL,
     t0 REAL NOT NULL,
     t1 REAL NOT NULL,
-    action TEXT NOT NULL,
-    who TEXT NOT NULL,
-    scene TEXT NOT NULL,
-    light TEXT NOT NULL,
-    caption TEXT NOT NULL,
+{_AXIS_COLUMNS}    caption TEXT NOT NULL,
     model TEXT NOT NULL,
     written TEXT NOT NULL,
     PRIMARY KEY (caption_set, id)
@@ -461,7 +464,7 @@ class CaptionCache:
 
     def get(self, seg_id: str) -> dict[str, str] | None:
         row = self.conn.execute(
-            "SELECT action, who, scene, light FROM captions WHERE caption_set = ? AND id = ?",
+            f"SELECT {_AXIS_LIST} FROM captions WHERE caption_set = ? AND id = ?",
             (self.caption_set, seg_id)).fetchone()
         return dict(row) if row else None
 
@@ -469,9 +472,9 @@ class CaptionCache:
             model: str) -> None:
         with self.conn:
             self.conn.execute(
-                "INSERT OR REPLACE INTO captions (caption_set, id, video_id, t0, t1, "
-                "action, who, scene, light, caption, model, written) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                f"INSERT OR REPLACE INTO captions (caption_set, id, video_id, t0, t1, "
+                f"{_AXIS_LIST}, caption, model, written) "
+                f"VALUES ({', '.join('?' * (len(AXES) + 8))})",
                 (self.caption_set, seg_id, seg_id.split(":")[0], t0, t1,
                  *(axes[a] for a in AXES), joined(axes), model, date.today().isoformat()))
 

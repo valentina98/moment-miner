@@ -9,6 +9,7 @@ from pathlib import Path
 import click
 
 from . import guard
+from .captions import AXES
 from .locate import LOCATORS
 from .hostpaths import UserPath, on_host
 from .manifest import Manifest
@@ -665,7 +666,7 @@ def status(data_dir, show_errors):
               help="A caption set from the cache (`mm status` lists them). "
                    "Defaults to the axes already in the index.")
 @click.option("--axis", default="caption", show_default=True,
-              type=click.Choice(["caption", "action", "who", "scene", "light"]),
+              type=click.Choice(["caption", *AXES]),
               help="Which axis each prompt is scored against.")
 @click.option("--ranker", default="mock", show_default=True,
               help="How to score. See the list below.")
