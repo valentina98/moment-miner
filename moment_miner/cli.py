@@ -1,6 +1,7 @@
 import csv
 from collections import Counter
 import json as jsonlib
+import re
 import time
 from importlib.resources import files as pkg_files
 from pathlib import Path
@@ -34,6 +35,18 @@ def _ranker_names() -> list[str]:
     from .rankers import ranker_names
 
     return ranker_names()
+
+
+def _set_name(ctx, param, value):
+    """A caption set's name, also used as a file name by `caption-export`."""
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", value):
+        raise click.BadParameter(
+            f"{value!r}: use letters, digits, '.', '_' and '-', starting with a letter or digit")
+    return value
+
+
+def _set_names(ctx, param, values):
+    return tuple(_set_name(ctx, param, v) for v in values)
 
 
 def _prompt_names() -> list[str]:
@@ -219,9 +232,9 @@ def _frame_size(ctx, param, value):
               help="Raster the stills are decoded at, independent of the "
                    "embedding's. Stills wider than 640 px are downscaled "
                    "before sending.")
-@click.option("--caption-dir", default=None, type=UserPath(file_okay=False),
-              help="Keep this caption set in DIR/captions.csv instead of the "
-                   "data folder's cache, e.g. to compare two prompts.")
+@click.option("--caption-set", default="default", show_default=True, callback=_set_name,
+              help="Keep this pass's captions under NAME in the cache, e.g. to "
+                   "compare two prompts with `mm caption-compare default NAME`.")
 @click.option("--caption-prompt", default="general", show_default=True,
               help="Caption prompt: a shipped name (listed below) or a file path.")
 @click.option("--caption-frames", default=None, type=int,
@@ -242,7 +255,7 @@ def _frame_size(ctx, param, value):
               help="Caption again even where the cache already has one.")
 @click.pass_obj
 def caption(data_dir, folder, model, allow_paid, paid_budget_usd, backend, frame_size,
-            caption_dir, caption_prompt, caption_frames, caption_frames_short,
+            caption_set, caption_prompt, caption_frames, caption_frames_short,
             caption_frames_long, short_video_s, long_video_s, force):
     """Caption the already-indexed segments under FOLDER.
 
@@ -254,8 +267,6 @@ def caption(data_dir, folder, model, allow_paid, paid_budget_usd, backend, frame
     from .captions import get_caption_backend
     from .indexer import caption_indexed
 
-    if caption_dir:
-        guard.output(caption_dir)
     store = SegmentStore(data_dir, backend)
     try:
         result = caption_indexed(
@@ -264,7 +275,7 @@ def caption(data_dir, folder, model, allow_paid, paid_budget_usd, backend, frame
                                 paid_budget_usd=paid_budget_usd),
             folder, frame_w=frame_size[0], frame_h=frame_size[1],
             axis_store=AxisStore(data_dir),
-            data_dir=data_dir, caption_dir=caption_dir, caption_frames=caption_frames,
+            data_dir=data_dir, caption_set=caption_set, caption_frames=caption_frames,
             caption_frames_short=caption_frames_short,
             caption_frames_long=caption_frames_long,
             short_video_s=short_video_s, long_video_s=long_video_s,
@@ -277,46 +288,45 @@ def caption(data_dir, folder, model, allow_paid, paid_budget_usd, backend, frame
 
 
 @main.command("caption-compare")
-@click.argument("caption_files", nargs=-1, required=True,
-                type=UserPath(exists=True, dir_okay=False))
+@click.argument("caption_sets", nargs=-1, required=True, callback=_set_names)
 @click.option("-o", "--output", default=None, type=UserPath(file_okay=False),
               help="Folder for the page and its key "
                    "[default: DATA_DIR/cuts/caption-compare_<time>/].")
-@click.option("--videos", default=None, type=UserPath(exists=True, file_okay=False),
-              help="Folder holding the videos, so the page can show each "
-                   "segment's stills. Omit for a text-only page.")
-@click.option("--segments", "segments_file", default=None,
-              type=UserPath(exists=True, dir_okay=False),
-              help="seg,video,t0,t1 CSV, needed when the caption files carry "
-                   "only seg,caption instead of the caption-cache columns.")
 @click.option("--frames-dir", default=None, type=UserPath(exists=True, file_okay=False),
               help="Use stills already extracted here, named <seg id>_*.jpg, "
                    "instead of decoding the videos.")
 @click.option("--blind/--no-blind", default=True, show_default=True,
-              help="Hide which file wrote which caption and shuffle their "
+              help="Hide which set wrote which caption and shuffle their "
                    "order, so a comparison can be judged without knowing.")
 @click.option("--seed", default=0, show_default=True, help="Shuffle seed.")
 @click.pass_obj
-def caption_compare(data_dir, caption_files, output, videos, segments_file, frames_dir,
-                    blind, seed):
-    """Render CAPTION_FILES side by side as one HTML page.
+def caption_compare(data_dir, caption_sets, output, frames_dir, blind, seed):
+    """Render CAPTION_SETS from the cache side by side as one HTML page.
 
-    Marks where the models disagree, and by default hides which file is which
-    so the result can be judged blind.
+    Compares the segments every set has captioned. Marks where the models
+    disagree, and by default hides which set is which so the result can be
+    judged blind. Each segment shows its stills when its video is on disk.
     """
+    from .captions import CaptionCache
     from .compare import build
 
     if output:
         guard.output(output)
+    sets = {name: CaptionCache(data_dir, name).rows() for name in caption_sets}
+    for name, rows in sets.items():
+        if not rows:
+            raise click.ClickException(f"no captions in set {name!r}; `mm status` lists the sets")
+    manifest = Manifest(data_dir / "manifest.db")
+    videos = {vid: manifest.video(vid) for vid in {r["video_id"] for rows in sets.values() for r in rows}}
     folder = Path(output) if output else _cut_dir(data_dir, "caption-compare")
     page = _new_file(folder, "caption-comparison.html")
     key_path = _new_file(folder, "caption-comparison-key.csv") if blind else None
-    html, order_map = build(
-        [Path(f) for f in caption_files], videos=Path(videos) if videos else None,
-        segments_file=Path(segments_file) if segments_file else None,
-        frames_dir=Path(frames_dir) if frames_dir else None,
-        blind=blind, seed=seed,
-    )
+    try:
+        html, order_map = build(
+            sets, videos={vid: row["path"] for vid, row in videos.items() if row},
+            frames_dir=Path(frames_dir) if frames_dir else None, blind=blind, seed=seed)
+    except ValueError as e:
+        raise click.ClickException(str(e)) from e
     page.write_text(html)
     click.echo(f"wrote {on_host(page)} ({page.stat().st_size / 1e6:.1f} MB)")
     if key_path:
@@ -325,6 +335,25 @@ def caption_compare(data_dir, caption_files, output, videos, segments_file, fram
             w.writeheader()
             w.writerows(order_map)
         click.echo(f"key: {on_host(key_path)} — leave it shut until every segment is judged")
+
+
+@main.command("caption-export")
+@click.argument("caption_set", default="default", callback=_set_name)
+@click.option("-o", "--output", default=None, type=UserPath(file_okay=False),
+              help="Folder for the CSV [default: DATA_DIR/cuts/caption-export_<time>/].")
+@click.pass_obj
+def caption_export(data_dir, caption_set, output):
+    """Write CAPTION_SET from the cache as `<CAPTION_SET>.csv`, for use outside the tool."""
+    from .captions import CaptionCache
+
+    if output:
+        guard.output(output)
+    cache = CaptionCache(data_dir, caption_set)
+    if not cache.rows():
+        raise click.ClickException(f"no captions in set {caption_set!r}; `mm status` lists the sets")
+    path = _new_file(Path(output) if output else _cut_dir(data_dir, "caption-export"),
+                     f"{caption_set}.csv")
+    click.echo(f"wrote {on_host(path)} ({cache.export(path)} captions)")
 
 
 @main.command()
@@ -397,21 +426,47 @@ def search(data_dir, query, k, backend, as_json, output, pad, static, static_max
               help="Frame-accurate cuts, recoding only the frames between each "
                    "cut and its nearest keyframe. --no-smart copies without "
                    "recoding and starts at the keyframe before (up to ~1 s early).")
+@click.option("--re-encode", "re_encode", is_flag=True,
+              help="Encode each whole clip again, exact at both ends. Every "
+                   "setting below defaults to the source's own; timecode and "
+                   "creation time are kept.")
+@click.option("--size", default=None, callback=lambda c, p, v: v and _frame_size(c, p, v),
+              help="With --re-encode: frame size WxH, e.g. 1920x1080.")
+@click.option("--codec", default=None, type=click.Choice(["h264", "h265", "prores"]),
+              help="With --re-encode: h264 for phones and the web, h265 smaller, "
+                   "prores for editing (written as .mov).")
+@click.option("--crf", default=None, type=click.IntRange(0, 51),
+              help="With --re-encode: ffmpeg's constant quality, lower is better "
+                   "and bigger (18 looks lossless). Without it the clip aims at the "
+                   "source's bitrate. Not for prores.")
+@click.option("--fps", default=None, type=click.FloatRange(min=0, min_open=True),
+              help="With --re-encode: frame rate.")
+@click.option("--no-audio", "no_audio", is_flag=True, help="With --re-encode: drop the sound.")
 @click.pass_obj
-def cut(data_dir, projects, output, smart):
+def cut(data_dir, projects, output, smart, re_encode, size, codec, crf, fps, no_audio):
     """Cut every segment of each LosslessCut PROJECT (.llc) into a clip,
     exactly as the project says: one written by `mm search` or saved in
     LosslessCut. A segment ranked by `mm search` gets its rank in front of
     the clip's name. A taken name or a failed cut does not stop the rest."""
-    from .export import cut_project
+    from .export import Encode, cut_project
 
+    encode = None
+    if re_encode:
+        if not smart:
+            raise click.UsageError("--re-encode and --no-smart are two different cuts; pick one")
+        if codec == "prores" and crf is not None:
+            raise click.UsageError("prores has no --crf; leave it out")
+        encode = Encode(size=size, codec=codec, crf=crf, fps=fps, audio=not no_audio)
+    elif any(v not in (None, False) for v in (size, codec, crf, fps, no_audio)):
+        raise click.UsageError("--size, --codec, --crf, --fps and --no-audio need --re-encode")
     if output:
         guard.output(output)
     manifest = Manifest(data_dir / "manifest.db")
     taken, failed = [], []
     for project in projects:
         out_dir = output or _cut_dir(data_dir, Path(project).stem)
-        written, project_taken, project_failed = cut_project(project, out_dir, smart=smart)
+        written, project_taken, project_failed = cut_project(project, out_dir, smart=smart,
+                                                             encode=encode)
         for out, video, a0, a1 in written:
             manifest.add_export(out)
             click.echo(f"{on_host(out)}  <- {on_host(video)} {fmt_ts(a0)} - {fmt_ts(a1)}")
@@ -583,10 +638,15 @@ def serve(data_dir, host, port, backend):
               help="List files that failed to index, with the error.")
 @click.pass_obj
 def status(data_dir, show_errors):
-    """Index statistics."""
+    """Index statistics and the caption sets in the cache."""
+    from .captions import CAPTIONS_DB, CaptionCache
+
     manifest = Manifest(data_dir / "manifest.db")
     for row in manifest.stats():
         click.echo(f"{row['status']:>8}: {row['n']} videos, {row['dur'] / 3600:.1f} h")
+    if (data_dir / CAPTIONS_DB).exists():
+        for name, n in CaptionCache(data_dir).sets():
+            click.echo(f"captions: {n} in set {name!r}")
     if show_errors:
         for row in manifest.errors():
             click.echo(f"  {on_host(row['path'])}: {row['error']}")
@@ -595,10 +655,9 @@ def status(data_dir, show_errors):
 @main.command(
     epilog="Rankers: " + ", ".join(_ranker_names()))
 @click.argument("prompts", type=UserPath(exists=True, dir_okay=False))
-@click.option("--captions", "captions_path", default=None,
-              type=UserPath(exists=True, dir_okay=False),
-              help="A caption set written by `mm caption`. Defaults to the "
-                   "axes already in the index.")
+@click.option("--captions", "caption_set", default=None,
+              help="A caption set from the cache (`mm status` lists them). "
+                   "Defaults to the axes already in the index.")
 @click.option("--axis", default="caption", show_default=True,
               type=click.Choice(["caption", "action", "who", "scene", "light"]),
               help="Which axis each prompt is scored against.")
@@ -608,7 +667,7 @@ def status(data_dir, show_errors):
 @click.option("--backend", default="siglip", show_default=True,
               help="Which index to read video names from.")
 @click.pass_obj
-def probe(data_dir, prompts, captions_path, axis, ranker, k, backend):
+def probe(data_dir, prompts, caption_set, axis, ranker, k, backend):
     """Run a file of free-form prompts against a caption set.
 
     `mm eval` scores the label set, which has ground truth and twelve rows.
@@ -616,17 +675,16 @@ def probe(data_dir, prompts, captions_path, axis, ranker, k, backend):
     type find the moment — and it has no ground truth, so it prints hits to
     read rather than a number to quote.
     """
-    import csv as _csv
-
+    from .captions import CaptionCache
     from .rankers import get_ranker
 
-    if captions_path:
-        rows = list(_csv.DictReader(open(captions_path, newline="")))
+    if caption_set:
+        rows = CaptionCache(data_dir, caption_set).rows()
     else:
         rows = AxisStore(data_dir).all()
     if not rows:
         raise click.ClickException(
-            f"no captions in {captions_path}" if captions_path
+            f"no captions in set {caption_set!r}; `mm status` lists the sets" if caption_set
             else "no axes in the index — run `mm caption` first, or pass --captions")
     # A segment id is a hash, which answers nothing on its own. The index
     # knows which file it came from, so a hit names a video you can open.

@@ -41,14 +41,15 @@ $ mm cut ~/.mm_data/cuts/athlete-performs-a-kong-vault_<timestamp>/video_001-ath
 | `mm index FOLDER` | scan recursively, index new, changed and previously failed videos under FOLDER and any whose segment geometry changed, drop videos no longer on disk; other folders are only reported, never touched; prints an ETA first; never captions (`--reindex`, `--no-asr`, `--backend`, `--no-estimate`) |
 | `mm calibrate VIDEO` | measure this machine's index speed on the first 24 s of VIDEO, for the ETA; `mm index` runs it by itself the first time. On a 4K 50 fps CPU box it reads 8–15% above the full-run rate, so the ETA errs long |
 | `mm search QUERY` | ranked timestamps, each widened by `--pad`, and one LosslessCut project per video; cuts nothing (`-k`, `-o`, `--pad`, `--json`, `--static`/`--moving`, `--static-max`) |
-| `mm cut PROJECT.llc…` | every segment of each project as a lossless clip, exactly as the project says, from `mm search` or saved in LosslessCut; a failed or taken clip does not stop the rest (`-o`, `--no-smart`) |
+| `mm cut PROJECT.llc…` | every segment of each project as a lossless clip, exactly as the project says, from `mm search` or saved in LosslessCut; a failed or taken clip does not stop the rest (`-o`, `--no-smart`, `--re-encode` with `--size`, `--codec`, `--crf`, `--fps`, `--no-audio`) |
 | `mm locate -q Q -v VIDEO` | where inside one video the action is (`--labels`/`--videos` to sweep a CSV, `--fps`, `--locator`, `--duration`, `-k`, `-o`) |
 | `mm annotate FOLDER` | interactive ground-truth labeling (`--template`) |
 | `mm eval` | recall@k + MRR against hand labels (`--labels`, default `<data-dir>/labels.csv`) |
-| `mm caption FOLDER` | caption already-indexed segments without re-embedding; the only command that spends (`--model`, `--allow-paid --paid-budget-usd`, `--frame-size`, `--caption-frames`, `--force`) |
-| `mm caption-compare A.csv B.csv` | several caption sets as one blind judging page (`-o`, `--videos`) |
+| `mm caption FOLDER` | caption already-indexed segments without re-embedding; the only command that spends (`--model`, `--caption-set`, `--allow-paid --paid-budget-usd`, `--frame-size`, `--caption-frames`, `--force`) |
+| `mm caption-compare SET SET…` | several caption sets from the cache as one blind judging page (`-o`, `--frames-dir`) |
+| `mm caption-export [SET]` | one caption set as `SET.csv`, for use outside the tool (`-o`) |
 | `mm serve` | resident HTTP search daemon (`/search`, `/health`) |
-| `mm status` | index statistics (`--errors` lists failed files) |
+| `mm status` | index statistics and the caption sets in the cache (`--errors` lists failed files) |
 | `mm help [COMMAND]` | this list / per-command help (also `--version`) |
 
 All commands take `--data-dir` (default `~/.mm_data`) before the subcommand.
@@ -60,14 +61,15 @@ The tool never changes or replaces a footage file, and every `make` target mount
 | What | Where | Override |
 |---|---|---|
 | the index (`manifest.db`, `lance/`) and the measured speed (`calibration.json`) | data folder | — |
-| caption cache, one file per video | `<data>/captions/<video id>.csv` | `--caption-dir` keeps a separate set |
+| caption cache, every caption set | `<data>/captions.db` | `--caption-set` names a set inside it |
+| an exported caption set | `<data>/cuts/caption-export_<timestamp>/<set>.csv` | `-o` |
 | labels from `mm annotate` | `<data>/labels.csv` | `--labels` |
 | `.llc` projects from `mm search`, `<video>-<query>.llc` | `<data>/cuts/<query>_<timestamp>/` | `-o`, `OUT=` |
 | clips from `mm cut`, `<rank>_<video>-<from>-<to><ext>` | `<data>/cuts/<project>_<timestamp>/` | `-o`, `OUT=` |
 | the `mm caption-compare` page and its key | `<data>/cuts/caption-compare_<timestamp>/` | `-o` |
 | the `mm locate` page | only with `-o` | — |
 
-Clip names follow LosslessCut's default, `<video>-<from>-<to><ext>` with the exact cut times, and a segment ranked by `mm search` gets its rank in front, so a folder sorts best match first (`02_2M4A8050-00.01.12.345-00.01.20.678.MP4`). An existing file is never replaced: a clip, `.llc` or page whose name is taken is skipped, and the run ends listing what it skipped, with exit code 1. `mm index` never indexes a clip the tool exported, wherever it sits, nor a LosslessCut export saved beside its source (`2M4A8050-00.00.23.993-00.00.28.358-seg01.MP4` next to `2M4A8050.MP4`, in any of LosslessCut's timecode formats, and its merged files); it prints how many it skipped per folder. Such an export holds the same moments as its source, so indexing it would return each moment twice. One whose source is elsewhere is indexed, because it may be the only copy, and so is one written under a renamed template, which cannot be recognised. A clip is written as `.partial-<name>` and renamed when complete, so a stopped or failed cut leaves no truncated clip; a `.partial-` file that a crash left behind is never indexed and can be deleted. The data folder may sit on any drive, footage folders included. Deleting the index costs a re-index; deleting `captions/` costs the captions again. Model weights are downloaded by their libraries into `~/.cache`, outside the tool's control.
+Clip names follow LosslessCut's default, `<video>-<from>-<to><ext>` with the exact cut times, and a segment ranked by `mm search` gets its rank in front, so a folder sorts best match first (`02_2M4A8050-00.01.12.345-00.01.20.678.MP4`). An existing file is never replaced: a clip, `.llc` or page whose name is taken is skipped, and the run ends listing what it skipped, with exit code 1. `mm index` never indexes a clip the tool exported, wherever it sits, nor a LosslessCut export saved beside its source (`2M4A8050-00.00.23.993-00.00.28.358-seg01.MP4` next to `2M4A8050.MP4`, in any of LosslessCut's timecode formats, and its merged files); it prints how many it skipped per folder. Such an export holds the same moments as its source, so indexing it would return each moment twice. One whose source is elsewhere is indexed, because it may be the only copy, and so is one written under a renamed template, which cannot be recognised. A clip is written as `.partial-<name>` and renamed when complete, so a stopped or failed cut leaves no truncated clip; a `.partial-` file that a crash left behind is never indexed and can be deleted. The data folder may sit on any drive, footage folders included. Deleting the index costs a re-index; deleting `captions.db` costs the captions again. Model weights are downloaded by their libraries into `~/.cache`, outside the tool's control.
 
 Every write passes one check, `moment_miner/guard.py`. It refuses to replace an existing video, and a path outside the data folder and the outputs named to the command. A refused write stops the command and names the path.
 
@@ -121,12 +123,19 @@ A stream copy can only begin on a keyframe, so cutting by copy alone snaps the s
 |---|---|---|---|
 | default (smart) | **1.200 s exact** | 1.808 s | decodes bit-identically to source |
 | `--no-smart` | 1.000 s | 2.122 s | whole clip byte-identical |
+| `--re-encode` | **1.200 s exact** | 1.808 s | whole clip encoded again |
 
 Boundary GOPs are recoded at `NEAR_LOSSLESS` (CRF 3). Verify start accuracy by pixel alignment on the copied interior, never by duration alone — a clip can be several frames out and still have a plausible duration, which is exactly how an earlier hand-rolled version passed its own tests while cutting four frames early.
 
+**The end is recoded too, because a copy cannot stop on an exact frame.** The Canon sources are IBBP: each P-frame is decoded before the two B-frames shown just ahead of it, and those B-frames need it. ffmpeg's stream copy, which LosslessCut also uses, keeps every packet decoded before the cut, so it always carries one P-frame that is shown after it. Measured frame by frame against the sources on 42 clips exported by LosslessCut in keyframe mode (`footage/cuts/`): all 42 end on one frame from past the cut, and in 23 of them the clip jumps 1 or 2 frames to reach it; 40 also start early, by up to 22 frames (0.44 s). Recoding the last partial GOP is what lets smartcut end on the requested frame. Today it ends one frame short instead: issue #42.
+
 `--no-smart` remains available and is the faster, fully byte-identical path when a keyframe-aligned start is good enough.
 
-**Dependency note:** smartcut is an optional extra (`pip install -e ".[smartcut]"`, pinned to `1.7`). The package was deprecated in February 2026 but is MIT, pure Python, and depends only on PyAV; if a future PyAV breaks it, vendoring the four modules used here is the escape hatch. Core `mm index` / `mm search` never pull it in.
+**Dependency note:** smartcut is an optional extra (`pip install -e ".[smartcut]"`, pinned to `1.7`). The package was deprecated in February 2026 but is MIT, pure Python, and depends on PyAV, numpy and tqdm; if a future PyAV breaks it, vendoring the five modules used here (1,836 lines) is the escape hatch. Core `mm index` / `mm search` never pull it in.
+
+## Changing the clip: `--re-encode`
+
+`--re-encode` is for a clip that has to change: a smaller frame (`--size 1920x1080`), another codec (`--codec h264` for phones and the web, `h265` smaller, `prores` for editing, written as `.mov`), a frame rate (`--fps`), or no sound (`--no-audio`). Each setting left out keeps the source's own; the bitrate too, unless `--crf` sets a constant quality instead (lower is better and bigger, 18 looks lossless). Timecode and creation time are kept, the timecode moved on to the clip's first frame. On the 1.2–3.0 s cut above it gives 90 frames, the first and last equal to source frames 60 and 149, at 1.2× the source's bitrate. It is slow: those 1.8 s of 4K took 40 s on a laptop CPU.
 
 ## Finding the cut: `mm locate`
 

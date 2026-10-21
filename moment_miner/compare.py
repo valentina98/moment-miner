@@ -1,7 +1,7 @@
 """Compare caption sets side by side and render a judging page.
 
-Several caption backends over the same segments produce several `captions.csv`
-files. This turns them into one HTML page: the segment's stills, the captions
+Several caption backends over the same segments produce several caption sets
+in the cache. This turns them into one HTML page: the segment's stills, the captions
 under them, and a mark where the models disagree about what is in the shot.
 
 Disagreement here is **lexical, not semantic**: a segment is marked when the
@@ -15,7 +15,6 @@ disagreement, and shared confident error, which reads as agreement. It is a
 reading aid, not a metric; nothing in the index depends on it.
 """
 
-import csv
 import json
 import random
 from importlib.resources import files as pkg_files
@@ -68,28 +67,6 @@ def agreement(captions: list[str]) -> dict:
     }
 
 
-def read_captions(path: Path) -> dict[str, dict]:
-    """A caption CSV, keyed by segment id.
-
-    Accepts the caption-cache columns written by `mm caption`
-    (id,t0,t1,caption,...) and the bare seg,caption shape, which needs a
-    --segments file to supply timings.
-    """
-    with Path(path).open(newline="") as f:
-        rows = list(csv.DictReader(f))
-    if not rows:
-        raise ValueError(f"{path} has no rows")
-    key = "id" if "id" in rows[0] else "seg"
-    if key not in rows[0] or "caption" not in rows[0]:
-        raise ValueError(f"{path}: expected columns id|seg and caption, got {list(rows[0])}")
-    return {r[key]: r for r in rows}
-
-
-def read_segments(path: Path) -> dict[str, dict]:
-    with Path(path).open(newline="") as f:
-        return {r["seg"]: r for r in csv.DictReader(f)}
-
-
 def load_frames(frames_dir: Path, seg_id: str) -> list[str]:
     """Stills already on disk, named `<seg id>_*.jpg` in shot order.
 
@@ -123,39 +100,37 @@ def balanced_order(n_segments: int, n_sets: int, seed: int) -> list[list[int]]:
 
 
 def build(
-    caption_files: list[Path],
-    videos: Path | None = None,
-    segments_file: Path | None = None,
+    sets: dict[str, list[dict]],
+    videos: dict[str, str] | None = None,
     frames_dir: Path | None = None,
     blind: bool = True,
     seed: int = 0,
     frames: bool = True,
 ) -> tuple[str, list[dict]]:
-    """Render the page. Returns (html, order_map)."""
-    sets = [read_captions(p) for p in caption_files]
-    names = [Path(p).stem for p in caption_files]
-    seg_meta = read_segments(segments_file) if segments_file else {}
-    ids = [i for i in sets[0] if all(i in s for s in sets)]
+    """Render the page from caption sets by name (rows with id, video_id, t0,
+    t1 and caption), stills decoded from `videos` (video id -> path) or read
+    from `frames_dir`. Returns (html, order_map)."""
+    names = list(sets)
+    by_id = [{r["id"]: r for r in rows} for rows in sets.values()]
+    ids = [i for i in by_id[0] if all(i in s for s in by_id)]
     if not ids:
-        raise ValueError("no segment id appears in every caption file")
+        raise ValueError(f"no segment is captioned in every set ({', '.join(names)})")
 
-    deck = balanced_order(len(ids), len(sets), seed) if blind else \
-        [list(range(len(sets)))] * len(ids)
+    deck = balanced_order(len(ids), len(by_id), seed) if blind else \
+        [list(range(len(by_id)))] * len(ids)
 
     data, order_map = [], []
     for seg_id, order in zip(ids, deck):
-        row = sets[0][seg_id]
-        meta = seg_meta.get(seg_id, row)
-        t0, t1 = float(meta.get("t0", 0)), float(meta.get("t1", 0))
+        row = by_id[0][seg_id]
+        t0, t1 = float(row["t0"]), float(row["t1"])
         shots = []
         if frames and frames_dir:
             shots = load_frames(frames_dir, seg_id)
-        elif frames and videos:
-            name = meta.get("video") or Path(row.get("path", "")).name
-            path = Path(videos) / name if name else None
-            if path and path.exists():
+        elif frames and videos and row["video_id"] in videos:
+            path = Path(videos[row["video_id"]])
+            if path.exists():
                 shots = encode_frames(path, t0, t1)
-        ordered = [sets[i][seg_id]["caption"] for i in order]
+        ordered = [by_id[i][seg_id]["caption"] for i in order]
         data.append({
             "seg": seg_id,
             "t0": t0,
