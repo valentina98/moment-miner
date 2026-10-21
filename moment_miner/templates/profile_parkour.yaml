@@ -1,0 +1,12 @@
+# Parkour: one person or a few moving over walls, rails and bars, mostly
+# outdoors and mostly silent. Copy this file to <data-dir>/profiles/ under a
+# new name to make your own: one section per command, keys are its long
+# option names as `mm <command> --help` shows them.
+index:
+  window: 8.0
+  stride: 4.0
+caption:
+  model: claude-haiku-4-5
+  caption-prompt: parkour
+annotate:
+  template: parkour

@@ -54,6 +54,22 @@ $ mm cut ~/.mm_data/cuts/athlete-performs-a-kong-vault_<timestamp>/video_001-ath
 
 All commands take `--data-dir` (default `~/.mm_data`) before the subcommand.
 
+### Profiles
+
+A profile holds the defaults of each command's options for one kind of footage, so a parkour archive and a wedding archive need no retyped flags. Every command but `help` takes `--profile NAME`: it reads `<data-dir>/profiles/NAME.yaml`, or a shipped profile of that name (today `parkour`), or a `.yaml` path. An option typed on the command line still wins; without `--profile` the built-in defaults apply. One section per command, its keys the long option names `mm <command> --help` shows, without the dashes:
+
+```yaml
+index:
+  stride: 4.0
+caption:
+  model: claude-haiku-4-5
+  caption-prompt: parkour
+annotate:
+  template: parkour
+```
+
+A misspelt command or option stops the command and lists the valid names. In Docker, `make <target> PROFILE=parkour` passes it to any target; `CAPTION_MODEL`, `CAPTION_PROMPT` and `TEMPLATE` are passed only when set, so they never hide what the profile says. API keys never go into a profile.
+
 ### What it writes, and where
 
 The tool never changes or replaces a footage file, and every `make` target mounts the footage `:ro`. Everything it writes goes to the data folder or to a folder you name, which may be a footage folder, its subfolder or a sibling:
@@ -181,7 +197,7 @@ docker run --rm moment-miner:dev     # run the test suite
 
 Footage is mounted read-only and never copied. `make` keeps its data in `~/.mm_data` and the model weights in `~/.cache/moment-miner`, and runs the container as you, so both hold ordinary files you own. `DATA` and `CACHE` take a docker volume name or an absolute path, so the index and the model weights can sit on the same drive as the footage rather than on the system disk.
 
-Day to day, the Makefile wraps all of this: `make test`, `make index VIDEOS=/path`, `make search Q="kong vault" OUT=clips`, `make cut PROJECT=clips/<file>.llc`, `make caption VIDEOS=/path`, `make annotate TEMPLATE=parkour`, `make eval`, `make probe PROMPTS=my.txt`, `make serve`, `make shell` — add `GPUS=--gpus=all` on a GPU box. API keys go in `.env`, git-ignored; copy `.env.example` and fill in what you need.
+Day to day, the Makefile wraps all of this: `make test`, `make index VIDEOS=/path`, `make search Q="kong vault" OUT=clips`, `make cut PROJECT=clips/<file>.llc`, `make caption VIDEOS=/path`, `make annotate TEMPLATE=parkour` (or `PROFILE=parkour` on any target), `make eval`, `make probe PROMPTS=my.txt`, `make serve`, `make shell` — add `GPUS=--gpus=all` on a GPU box. API keys go in `.env`, git-ignored; copy `.env.example` and fill in what you need.
 
 **Vast.ai:** either push the image (`docker tag moment-miner <user>/moment-miner && docker push <user>/moment-miner`) and use it as the instance image, or launch a stock `pytorch/pytorch` template and put this in the on-start script:
 
