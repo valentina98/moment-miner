@@ -3,7 +3,7 @@ import subprocess
 
 import pytest
 
-from moment_miner.export import export_clip
+from moment_miner.export import export_clip, smart_cut
 from moment_miner.ffbin import ffmpeg_exe, ffprobe_exe
 from moment_miner.probe import keyframe_after, keyframe_before, probe
 
@@ -53,6 +53,22 @@ def test_smart_cut_is_frame_accurate_at_both_ends(tmp_path, fast_video):
     assert abs(a0 - 2.2) < 1e-6 and abs(a1 - 4.0) < 1e-6
     # Both boundaries are cut, so the duration lands within a frame either way.
     assert abs(probe(str(out))["duration"] - 1.8) < 2 * FRAME
+
+
+@requires_ffmpeg
+@pytest.mark.parametrize("end, frames", [(4.98, 139), (5.04, 142)])
+def test_smart_cut_keeps_the_last_frame_when_the_end_is_between_keyframes(
+        tmp_path, fast_video, end, frames):
+    """4.0 above is a keyframe, where the end is a copied packet with its own
+    duration; between keyframes it is re-encoded, and was dropped (#42)."""
+    out = tmp_path / "smart.mp4"
+    smart_cut(str(fast_video), 2.2, end, str(out))
+    decoded = subprocess.run(
+        [ffprobe_exe(), "-v", "error", "-count_frames", "-select_streams", "v:0",
+         "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", str(out)],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    assert int(decoded) == frames
 
 
 @requires_ffmpeg

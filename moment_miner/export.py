@@ -139,6 +139,27 @@ def _stream_copy(path: str, start: float, end: float, out: str) -> None:
     raise RuntimeError("ffmpeg export failed: " + " | ".join(errors))
 
 
+def _fill_packet_durations(cutter) -> None:
+    """smartcut 1.7 muxes the frames it re-encodes without a packet duration.
+    The MP4's last sample then lasts 0, its edit list ends where that sample
+    starts, and every decoder drops the last frame of a cut that ends between
+    keyframes (upstream skeskinen/smartcut#27, unanswered). Gives each such
+    packet one frame's duration; remuxed source packets keep their own."""
+    if getattr(cutter, "_fills_durations", False):
+        return
+    segment, finish = cutter.segment, cutter.finish
+
+    def filled(self, packets):
+        frame = round(1 / (self.in_stream.guessed_rate * self.out_time_base))
+        for p in packets:
+            p.duration = p.duration or frame
+        return packets
+
+    cutter.segment = lambda self, s: filled(self, segment(self, s))
+    cutter.finish = lambda self: filled(self, finish(self))
+    cutter._fills_durations = True
+
+
 def smart_cut(path: str, start: float, end: float, out: str) -> None:
     """Frame-accurate export via the `smartcut` package (optional extra).
 
@@ -150,7 +171,7 @@ def smart_cut(path: str, start: float, end: float, out: str) -> None:
 
     Pinned deliberately. The package was deprecated in February 2026, but
     it is MIT, pure Python, and its only heavy dependency is PyAV; if a
-    future PyAV breaks it, vendoring the four modules used here is the
+    future PyAV breaks it, vendoring the five modules it uses is the
     escape hatch. Do not replace it with hand-rolled ffmpeg calls — that
     is what this code used to be, and it cut four frames early on real
     50 fps footage while passing its own tests.
@@ -159,13 +180,15 @@ def smart_cut(path: str, start: float, end: float, out: str) -> None:
         from fractions import Fraction
 
         from smartcut.cut_video import (AudioExportInfo, AudioExportSettings,
-                                        VideoExportMode, VideoExportQuality,
-                                        VideoSettings, smart_cut as _smart_cut)
+                                        VideoCutter, VideoExportMode,
+                                        VideoExportQuality, VideoSettings,
+                                        smart_cut as _smart_cut)
         from smartcut.media_container import MediaContainer
     except ImportError as exc:  # pragma: no cover - depends on install extras
         raise RuntimeError(
             "smart cut needs the 'smartcut' extra: pip install -e '.[smartcut]'"
         ) from exc
+    _fill_packet_durations(VideoCutter)
 
     container = MediaContainer(path)
     try:
