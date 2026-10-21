@@ -125,9 +125,11 @@ A stream copy can only begin on a keyframe, so cutting by copy alone snaps the s
 
 Boundary GOPs are recoded at `NEAR_LOSSLESS` (CRF 3). Verify start accuracy by pixel alignment on the copied interior, never by duration alone — a clip can be several frames out and still have a plausible duration, which is exactly how an earlier hand-rolled version passed its own tests while cutting four frames early.
 
+**The end is recoded too, because a copy cannot stop on an exact frame.** The Canon sources are IBBP: each P-frame is decoded before the two B-frames shown just ahead of it, and those B-frames need it. ffmpeg's stream copy, which LosslessCut also uses, keeps every packet decoded before the cut, so it always carries one P-frame that is shown after it. Measured frame by frame against the sources on 42 clips exported by LosslessCut in keyframe mode (`footage/cuts/`): all 42 end on one frame from past the cut, and in 23 of them the clip jumps 1 or 2 frames to reach it; 40 also start early, by up to 22 frames (0.44 s). Recoding the last partial GOP is what lets smartcut end on the requested frame. Today it ends one frame short instead: issue #42.
+
 `--no-smart` remains available and is the faster, fully byte-identical path when a keyframe-aligned start is good enough.
 
-**Dependency note:** smartcut is an optional extra (`pip install -e ".[smartcut]"`, pinned to `1.7`). The package was deprecated in February 2026 but is MIT, pure Python, and depends only on PyAV; if a future PyAV breaks it, vendoring the four modules used here is the escape hatch. Core `mm index` / `mm search` never pull it in.
+**Dependency note:** smartcut is an optional extra (`pip install -e ".[smartcut]"`, pinned to `1.7`). The package was deprecated in February 2026 but is MIT, pure Python, and depends on PyAV, numpy and tqdm; if a future PyAV breaks it, vendoring the five modules used here (1,836 lines) is the escape hatch. Core `mm index` / `mm search` never pull it in.
 
 ## Changing the clip: `--re-encode`
 
