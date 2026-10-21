@@ -45,10 +45,11 @@ $ mm cut ~/.mm_data/cuts/athlete-performs-a-kong-vault_<timestamp>/video_001-ath
 | `mm locate -q Q -v VIDEO` | where inside one video the action is (`--labels`/`--videos` to sweep a CSV, `--fps`, `--locator`, `--duration`, `-k`, `-o`) |
 | `mm annotate FOLDER` | interactive ground-truth labeling (`--template`) |
 | `mm eval` | recall@k + MRR against hand labels (`--labels`, default `<data-dir>/labels.csv`) |
-| `mm caption FOLDER` | caption already-indexed segments without re-embedding; the only command that spends (`--model`, `--allow-paid --paid-budget-usd`, `--frame-size`, `--caption-frames`, `--force`) |
-| `mm caption-compare A.csv B.csv` | several caption sets as one blind judging page (`-o`, `--videos`) |
+| `mm caption FOLDER` | caption already-indexed segments without re-embedding; the only command that spends (`--model`, `--caption-set`, `--allow-paid --paid-budget-usd`, `--frame-size`, `--caption-frames`, `--force`) |
+| `mm caption-compare SET SET…` | several caption sets from the cache as one blind judging page (`-o`, `--frames-dir`) |
+| `mm caption-export [SET]` | one caption set as `SET.csv`, for use outside the tool (`-o`) |
 | `mm serve` | resident HTTP search daemon (`/search`, `/health`) |
-| `mm status` | index statistics (`--errors` lists failed files) |
+| `mm status` | index statistics and the caption sets in the cache (`--errors` lists failed files) |
 | `mm help [COMMAND]` | this list / per-command help (also `--version`) |
 
 All commands take `--data-dir` (default `~/.mm_data`) before the subcommand.
@@ -60,14 +61,15 @@ The tool never changes or replaces a footage file, and every `make` target mount
 | What | Where | Override |
 |---|---|---|
 | the index (`manifest.db`, `lance/`) and the measured speed (`calibration.json`) | data folder | — |
-| caption cache, one file per video | `<data>/captions/<video id>.csv` | `--caption-dir` keeps a separate set |
+| caption cache, every caption set | `<data>/captions.db` | `--caption-set` names a set inside it |
+| an exported caption set | `<data>/cuts/caption-export_<timestamp>/<set>.csv` | `-o` |
 | labels from `mm annotate` | `<data>/labels.csv` | `--labels` |
 | `.llc` projects from `mm search`, `<video>-<query>.llc` | `<data>/cuts/<query>_<timestamp>/` | `-o`, `OUT=` |
 | clips from `mm cut`, `<rank>_<video>-<from>-<to><ext>` | `<data>/cuts/<project>_<timestamp>/` | `-o`, `OUT=` |
 | the `mm caption-compare` page and its key | `<data>/cuts/caption-compare_<timestamp>/` | `-o` |
 | the `mm locate` page | only with `-o` | — |
 
-Clip names follow LosslessCut's default, `<video>-<from>-<to><ext>` with the exact cut times, and a segment ranked by `mm search` gets its rank in front, so a folder sorts best match first (`02_2M4A8050-00.01.12.345-00.01.20.678.MP4`). An existing file is never replaced: a clip, `.llc` or page whose name is taken is skipped, and the run ends listing what it skipped, with exit code 1. `mm index` never indexes a clip the tool exported, wherever it sits. A clip is written as `.partial-<name>` and renamed when complete, so a stopped or failed cut leaves no truncated clip; a `.partial-` file that a crash left behind is never indexed and can be deleted. The data folder may sit on any drive, footage folders included. Deleting the index costs a re-index; deleting `captions/` costs the captions again. Model weights are downloaded by their libraries into `~/.cache`, outside the tool's control.
+Clip names follow LosslessCut's default, `<video>-<from>-<to><ext>` with the exact cut times, and a segment ranked by `mm search` gets its rank in front, so a folder sorts best match first (`02_2M4A8050-00.01.12.345-00.01.20.678.MP4`). An existing file is never replaced: a clip, `.llc` or page whose name is taken is skipped, and the run ends listing what it skipped, with exit code 1. `mm index` never indexes a clip the tool exported, wherever it sits. A clip is written as `.partial-<name>` and renamed when complete, so a stopped or failed cut leaves no truncated clip; a `.partial-` file that a crash left behind is never indexed and can be deleted. The data folder may sit on any drive, footage folders included. Deleting the index costs a re-index; deleting `captions.db` costs the captions again. Model weights are downloaded by their libraries into `~/.cache`, outside the tool's control.
 
 Every write passes one check, `moment_miner/guard.py`. It refuses to replace an existing video, and a path outside the data folder and the outputs named to the command. A refused write stops the command and names the path.
 
