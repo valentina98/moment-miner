@@ -14,6 +14,7 @@ dependencies = [
     "lancedb>=0.15",
     "numpy>=1.26",
     "pyyaml>=6.0",
+    "tqdm>=4.60",
 ]
 
 [project.optional-dependencies]
