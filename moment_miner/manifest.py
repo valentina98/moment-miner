@@ -1,7 +1,9 @@
 import hashlib
 import os
+import re
 import sqlite3
 import time
+from collections import defaultdict
 from pathlib import Path
 
 from .guard import writable
@@ -14,6 +16,28 @@ VIDEO_EXTS = {
 # A clip carries this prefix until it is completely written; one a crash left
 # behind is never indexed.
 PARTIAL = ".partial-"
+
+# What LosslessCut appends to a source's name when it exports, by its default
+# templates (`outputNameTemplate.ts`): `-<from>-<to>[-segNN|-<label>]` for a cut,
+# `-merged-<epoch ms>` and `-cut-merged-<epoch ms>` for a merge. A time is
+# digits and dots in each of its four timecode formats (00.01.12.345,
+# 00.01.12.17 with frames, 72.345, a frame count). A renamed template cannot be
+# recognised; such exports are indexed like any other video.
+_LLC_TIME = r"\d+(?:\.\d+)*"
+_LLC_SUFFIX = re.compile(rf"-(?:{_LLC_TIME}-{_LLC_TIME}(?:-.+)?|(?:cut-)?merged-\d+)")
+
+
+def llc_source(name: str, stems: set[str]) -> str | None:
+    """The stem in `stems` that a LosslessCut export named `name` was cut from.
+
+    Only an export whose source sits beside it counts: the source is what makes
+    it a duplicate. A clip whose source is gone is the only copy of its moment.
+    """
+    stem = Path(name).stem
+    for i, c in enumerate(stem):
+        if c == "-" and stem[:i] in stems and _LLC_SUFFIX.fullmatch(stem[i:]):
+            return stem[:i]
+    return None
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS videos (
@@ -96,15 +120,23 @@ class Manifest:
         """Register new/changed videos under folder. Returns counts.
 
         `missing` lists known videos under folder whose file is gone; the
-        caller decides whether to `forget` them.
+        caller decides whether to `forget` them. `skipped` lists the
+        LosslessCut exports found beside their source, which are never indexed.
         """
         counts = {"new": 0, "changed": 0, "unchanged": 0}
         exported = {r[0] for r in self.conn.execute("SELECT path FROM exports")}
-        seen = set()
-        for p in sorted(Path(folder).resolve().rglob("*")):
-            if not p.is_file() or p.suffix.lower() not in VIDEO_EXTS or p.name.startswith(PARTIAL):
-                continue
+        videos = [p for p in sorted(Path(folder).resolve().rglob("*"))
+                  if p.is_file() and p.suffix.lower() in VIDEO_EXTS
+                  and not p.name.startswith(PARTIAL)]
+        stems = defaultdict(set)
+        for p in videos:
+            stems[p.parent].add(p.stem)
+        seen, skipped = set(), []
+        for p in videos:
             if on_host(p) in exported:
+                continue
+            if llc_source(p.name, stems[p.parent]):
+                skipped.append(str(p))
                 continue
             seen.add(str(p))
             st = p.stat()
@@ -132,7 +164,9 @@ class Manifest:
         counts["missing"] = [
             r["path"] for r in self.conn.execute("SELECT path FROM videos ORDER BY path")
             if r["path"].startswith(prefix) and r["path"] not in seen
+            and r["path"] not in skipped
         ]
+        counts["skipped"] = skipped
         return counts
 
     def forget(self, path: str):

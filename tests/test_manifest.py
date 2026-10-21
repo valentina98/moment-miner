@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 from moment_miner.manifest import Manifest, fingerprint
 
@@ -32,8 +33,8 @@ def test_scan_new_unchanged_changed(tmp_path):
     (archive / "notes.txt").write_text("not a video")
 
     m = Manifest(tmp_path / "mm.db")
-    assert m.scan(archive) == {"new": 2, "changed": 0, "unchanged": 0, "missing": []}
-    assert m.scan(archive) == {"new": 0, "changed": 0, "unchanged": 2, "missing": []}
+    assert m.scan(archive) == {"new": 2, "changed": 0, "unchanged": 0, "missing": [], "skipped": []}
+    assert m.scan(archive) == {"new": 0, "changed": 0, "unchanged": 2, "missing": [], "skipped": []}
 
     _fake_video(archive / "a.mp4", b"y" * 8192)
     os.utime(archive / "a.mp4", (1, 1))
@@ -58,7 +59,54 @@ def test_scan_skips_clips_the_tool_exported(tmp_path):
     _fake_video(archive / "01_real-00.00.01.000-00.00.03.000.mp4")
     m = Manifest(tmp_path / "mm.db")
     m.add_export(archive / "01_real-00.00.01.000-00.00.03.000.mp4")
-    assert m.scan(archive) == {"new": 1, "changed": 0, "unchanged": 0, "missing": []}
+    assert m.scan(archive) == {"new": 1, "changed": 0, "unchanged": 0, "missing": [], "skipped": []}
+
+
+def test_scan_skips_losslesscut_exports_beside_their_source(tmp_path):
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    names = ["2M4A8050.MP4",
+             "2M4A8050-00.00.23.993-00.00.28.358-seg01.MP4",
+             "2M4A8050-00.01.08.609-00.01.10.946.MP4",
+             "2M4A8050-00.00.10.61-00.00.18.92-kong vault.MP4",
+             "2M4A8050-72.345-75.000.MP4",
+             "2M4A8050-merged-1760000000000.MP4",
+             "2M4A8050-cut-merged-1760000000000.MP4"]
+    for name in names:
+        _fake_video(archive / name)
+    counts = Manifest(tmp_path / "mm.db").scan(archive)
+    assert counts["new"] == 1
+    assert sorted(Path(p).name for p in counts["skipped"]) == sorted(names[1:])
+
+
+def test_scan_indexes_a_clip_whose_source_is_not_beside_it(tmp_path):
+    archive = tmp_path / "archive"
+    (archive / "cuts").mkdir(parents=True)
+    _fake_video(archive / "2M4A8050.MP4")
+    _fake_video(archive / "cuts" / "2M4A8050-00.00.23.993-00.00.28.358.MP4")
+    _fake_video(archive / "MVI_8722-00.00.34.106-00.00.46.010.MP4")
+    counts = Manifest(tmp_path / "mm.db").scan(archive)
+    assert counts["new"] == 3 and counts["skipped"] == []
+
+
+def test_scan_keeps_a_dashed_name_that_is_not_an_export(tmp_path):
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    for name in ("GX010123.MP4", "GX010123-final.MP4", "GX010123-2.MP4"):
+        _fake_video(archive / name)
+    counts = Manifest(tmp_path / "mm.db").scan(archive)
+    assert counts["new"] == 3 and counts["skipped"] == []
+
+
+def test_an_indexed_clip_skipped_once_its_source_arrives_is_not_missing(tmp_path):
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    _fake_video(archive / "a-00.00.01.000-00.00.03.000.mp4")
+    m = Manifest(tmp_path / "mm.db")
+    assert m.scan(archive)["new"] == 1
+    _fake_video(archive / "a.mp4", b"y" * 4096)
+    counts = m.scan(archive)
+    assert counts["missing"] == [] and len(counts["skipped"]) == 1
 
 
 def test_scan_knows_an_export_written_through_another_mount(tmp_path, monkeypatch):
