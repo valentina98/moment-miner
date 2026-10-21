@@ -107,9 +107,11 @@ def index_pending(
     folder=None,
     failed: dict[str, str] | None = None,
     log=print,
+    progress=None,
 ) -> dict:
     """Embed the pending videos. Captions come only from `caption_indexed`;
-    a re-embedded segment keeps the ones it had.
+    a re-embedded segment keeps the ones it had. `progress(1)` is called
+    once per window read, readable or not.
 
     `failed` maps the paths whose probe already failed in this run (the
     ETA estimate's) to the error; they are marked failed without a second
@@ -142,6 +144,8 @@ def index_pending(
             for t0, t1, frames in extract_windows(
                 path, spans, n=frames_per_window, win=win
             ):
+                if progress:
+                    progress(1)
                 if frames is None:
                     # A truncated file stops yielding from its last good packet
                     # on; everything before it is still worth indexing.
