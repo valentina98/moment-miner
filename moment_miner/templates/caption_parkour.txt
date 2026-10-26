@@ -10,7 +10,7 @@ Label it for a search index: what someone would type to find this clip again, no
 Reply with one line and nothing else: the five parts below, comma-separated, in this order. Every part is filled.
 
 - action: the move, named as a move rather than as someone doing it: "vault over a rail", not "person vaulting over rail". Use the move's own name only when the move is unmistakable: a kong vault, a swing gainer. Never reach for a name to avoid plain words. 2-6 words. If nothing happens, the scene's state: "empty skatepark".
-- who: nobody, a woman, a man, a girl, a boy, two women, a man and a woman, a group, or "a woman with a dog". "One person" only when the stills cannot tell.
+- who: nobody, a woman, a man, a girl, a boy, two women, a man and a woman, a group.
 - scene: where it is, 2-8 words, concrete enough to search: "parkour park with rails", not "outdoors".
 - light: one of: sunny, overcast, golden hour, dusk/dawn, night, floodlit, indoors.
 - things: up to four things in view that someone might search for, most noticeable first, separated by semicolons: landmarks, buildings, vehicles, animals, water, a colour that stands out. "metal rail; concrete wall; scaffolding".
