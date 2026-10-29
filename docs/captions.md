@@ -42,7 +42,7 @@ Running your own prompts against a caption set, and comparing rankers: .
 | Who is in the shot | Counts discriminate — two people talking is not one person working — and so do woman, man and child, which people type ("woman jumping in water"). A word or two. |
 | Surroundings | Named concretely. "Outdoors" alone is what makes many clips from one session read alike. |
 | Light | Cheap, visibly varies, not recoverable from metadata. |
-| Things in view | Landmarks, buildings, vehicles, water, a colour that stands out: "climbing a tower" and "pink lake" are searches for an object, not an action or a place. Up to four, separated by semicolons, and per window: `scene` is voted once per clip, so what passes through a long take would otherwise be lost. |
+| Things in view | Landmarks, buildings, vehicles, water, a colour that stands out: "climbing a tower" and "pink lake" are searches for an object, not an action or a place. Up to four, comma-separated as the last field, and per window: `scene` is voted once per clip, so what passes through a long take would otherwise be lost. |
 
 Three things are left out on purpose. **Outcome** — clean landing, bail, slip — because a handful of stills cannot show a stumble, so asking for it invites an invented one. **Shot type**, as the least certain thing to read off stills. **Who someone is, by name**: a vision model should not guess identity, so names belong in a file beside the footage, joined into the segment's text the way a transcript is.
 

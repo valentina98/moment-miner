@@ -13,6 +13,6 @@ Reply with one line and nothing else: the five parts below, comma-separated, in 
 - who: nobody, a woman, a man, a girl, a boy, two people, a man and a woman, a group.
 - scene: where it is, 2-8 words, concrete enough to search: "beach with a stone pier", not "outdoors".
 - light: one of: sunny, overcast, golden hour, dusk/dawn, night, floodlit, indoors.
-- things: up to four things in view that someone might search for, most noticeable first, separated by semicolons: landmarks, buildings, vehicles, animals, water, a colour that stands out. "pink lake; stone tower; rowing boat".
+- things: up to four things in view that someone might search for, most noticeable first, separated by commas: landmarks, buildings, vehicles, animals, water, a colour that stands out. "pink lake, stone tower, rowing boat".
 
 Plain words a person would type: "bike", not "two-wheeled pedal vehicle". No sentences, no framing ("a video showing", "the image shows"), no comment on the shot itself. Name only what you see, and write "unclear" for a key the stills cannot answer.

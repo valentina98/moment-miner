@@ -566,11 +566,11 @@ def test_an_unclear_the_model_wrote_fills_its_axis():
 
 
 def test_things_is_searchable_and_kept_in_the_cache(tmp_path):
-    axes = parse_axes("climbing, a man, old fort, overcast, stone tower; ladder")
-    assert joined(axes).endswith("overcast, stone tower; ladder")
+    axes = parse_axes("climbing, a man, old fort, overcast, stone tower, ladder")
+    assert joined(axes).endswith("overcast, stone tower, ladder")
     sc = CaptionCache(tmp_path)
     sc.put("v:0.0", 0.0, 8.0, axes, "m")
-    assert sc.get("v:0.0")["things"] == "stone tower; ladder"
+    assert sc.get("v:0.0")["things"] == "stone tower, ladder"
 
 
 def test_shipped_prompts_ask_for_every_axis_in_order():
