@@ -299,10 +299,11 @@ def test_a_reindex_without_captioning_keeps_the_stored_captions(indexable, tmp_p
     index_pending(manifest, store, be, use_asr=False, axis_store=axis_store,
                   log=lambda *_: None)
     segs = store.segments()
-    axes = {"action": "kong vault", "who": "one person", "scene": "park", "light": "sunny"}
+    axes = {"action": "kong vault", "who": "one person", "scene": "park", "light": "sunny",
+            "things": "rail"}
     axis_store.add([{"id": s["id"], "path": s["path"], "t0": s["t0"], "t1": s["t1"], **axes}
                     for s in segs])
     manifest.reset(tmp_path / "archive")
     index_pending(manifest, store, be, use_asr=False, axis_store=axis_store,
                   log=lambda *_: None)
-    assert {s["text"] for s in store.segments()} == {"kong vault, one person, park, sunny"}
+    assert {s["text"] for s in store.segments()} == {"kong vault, one person, park, sunny, rail"}

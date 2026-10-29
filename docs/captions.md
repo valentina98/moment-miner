@@ -14,7 +14,7 @@ Footage without speech leaves that column empty, so the text half of the fusion 
 
 They are separate files on purpose. **Captions are machine-written indexed content; labels are human-checked ground truth.** Scoring captions against labels written by the same model measures agreement, not accuracy, so a caption is never also the label it is scored against.
 
-Columns: `caption_set,id,video_id,t0,t1,action,who,scene,light,caption,model,written`. `mm caption-export SET` writes one set as `SET.csv` with the same columns minus `caption_set`, for use outside the tool; nothing in the tool reads CSV captions.
+Columns: `caption_set,id,video_id,t0,t1,action,who,scene,light,things,caption,model,written`. `mm caption-export SET` writes one set as `SET.csv` with the same columns minus `caption_set`, for use outside the tool; nothing in the tool reads CSV captions.
 
 Captions are read back on every pass. `mm caption` buys only segments that don't have one, unless `--force`. `mm index`, `--reindex` included, spends nothing and keeps each segment's stored caption in its searchable text, as long as the segment geometry is unchanged. This is why the cache sits beside the index rather than in it: a caption costs session quota (money only on the API-key route), so re-indexing, a model change, `mm prune` or a deleted index never touches `captions.db`.
 
@@ -39,13 +39,14 @@ Running your own prompts against a caption set, and comparing rankers: .
 | Axis | Why it is in |
 | --- | --- |
 | Action | The thing searched for, almost always. It leads, so its words carry the most weight. |
-| Who is in the shot | Counts discriminate — two people talking is not one person working. A word or two. |
+| Who is in the shot | Counts discriminate — two people talking is not one person working — and so do woman, man and child, which people type ("woman jumping in water"). A word or two. |
 | Surroundings | Named concretely. "Outdoors" alone is what makes many clips from one session read alike. |
 | Light | Cheap, visibly varies, not recoverable from metadata. |
+| Things in view | Landmarks, buildings, vehicles, water, a colour that stands out: "climbing a tower" and "pink lake" are searches for an object, not an action or a place. Up to four, comma-separated as the last field, and per window: `scene` is voted once per clip, so what passes through a long take would otherwise be lost. |
 
 Three things are left out on purpose. **Outcome** — clean landing, bail, slip — because a handful of stills cannot show a stumble, so asking for it invites an invented one. **Shot type**, as the least certain thing to read off stills. **Who someone is, by name**: a vision model should not guess identity, so names belong in a file beside the footage, joined into the segment's text the way a transcript is.
 
-**The prompt is a template, and two ship.** They live in `moment_miner/templates/` as `caption_<name>.txt` and are chosen with `--caption-prompt`, which also takes a path to your own. `general` is the one to copy: it names the four axes with examples from no particular world. `parkour` is a worked example of the same template tuned to one corpus, and it shows what tuning is for — on parkour footage filmed at a skate spot, the general prompt returns "skateboarding", "wheelie" and "bicycle stunt", while the tuned one returns vaults and wall runs from the same stills. A prompt is a template because what a caption names decides what can be searched, and that differs per corpus.
+**The prompt is a template, and two ship.** They live in `moment_miner/templates/` as `caption_<name>.txt` and are chosen with `--caption-prompt`, which also takes a path to your own. `general` is the one to copy: it names the five axes with examples from no particular world. `parkour` is a worked example of the same template tuned to one corpus, and it shows what tuning is for — on parkour footage filmed at a skate spot, the general prompt returns "skateboarding", "wheelie" and "bicycle stunt", while the tuned one returns vaults and wall runs from the same stills. A prompt is a template because what a caption names decides what can be searched, and that differs per corpus.
 
 **What the index already measures exactly does not belong in a label.** Static-vs-moving, frame rate, duration and date are numbers, held in each segment's `motion` value and the probe metadata; a caption guessing "static shot" duplicates a measurement and spends words doing it. Those are filters — the label is for what only a reader of the frames can say.
 

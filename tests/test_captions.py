@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from moment_miner.captions import (
+    AXES,
     CaptionCache,
     even_points,
     frames_for_duration,
@@ -19,6 +20,7 @@ from moment_miner.captions import (
     still_times,
     subsample,
     LIGHTS,
+    fills_axes,
     joined,
     load_prompt,
     parse_axes,
@@ -137,7 +139,7 @@ def test_caption_sends_the_stills_the_rule_asks_for_and_returns_text():
     client = fake_client()
     be = ClaudeCaptionBackend("claude-haiku-4-5", client=client)
     out = be.caption(frames(8), span=8.0, stride=4.0)
-    assert joined(out) == "a person vaults a rail in a concrete plaza, unclear, unclear, unclear"
+    assert joined(out) == "a person vaults a rail in a concrete plaza, unclear, unclear, unclear, unclear"
     assert out["action"] == "a person vaults a rail in a concrete plaza"
     content = client.messages.calls[0]["messages"][0]["content"]
     assert sum(1 for b in content if b["type"] == "image") == 2
@@ -241,7 +243,7 @@ def test_cache_is_one_db_in_the_data_folder(tmp_path):
     [row] = sc.rows()
     assert row["id"] == "a:0.0" and row["video_id"] == "a"
     assert row["action"] == "a caption"
-    assert row["caption"] == "a caption, unclear, unclear, unclear"
+    assert row["caption"] == "a caption, unclear, unclear, unclear, unclear"
     assert row["model"] == "claude-haiku-4-5"
 
 
@@ -272,7 +274,7 @@ def test_an_exported_set_has_every_column_but_the_set(tmp_path):
     rows = list(csv.DictReader((tmp_path / "trial.csv").open()))
     assert [r["id"] for r in rows] == ["a:0.0", "a:4.0"]
     assert list(rows[0]) == ["id", "video_id", "t0", "t1", "action", "who", "scene",
-                             "light", "caption", "model", "written"]
+                             "light", "things", "caption", "model", "written"]
 
 
 def test_an_unwritable_cache_fails_before_spending(tmp_path, monkeypatch):
@@ -374,9 +376,9 @@ def test_caption_pass_over_an_existing_index(tmp_path, synthetic_video):
     counts = caption_indexed(manifest, store, be, synthetic_video.parent,
                              frame_w=200, frame_h=120, data_dir=tmp_path / "data", log=lambda *a: None)
 
-    assert counts["captioned"] == len(before) == 2
+    assert counts["captioned"] == len(before) == 2 and counts["unfilled"] == 0
     rows = store.table.search().limit(100).to_list()
-    assert all(r["text"] == "kong vault over a rail, unclear, unclear, unclear"
+    assert all(r["text"] == "kong vault over a rail, unclear, unclear, unclear, unclear"
                for r in rows)
     assert {r["id"]: list(map(float, r["vector"])) for r in rows} == before
     assert {h["id"] for h in _fts(store, "kong")} == set(before)
@@ -479,7 +481,7 @@ def test_mm_caption_cli(tmp_path, synthetic_video):
     rows = CaptionCache(tmp_path / "data", "trial").rows()
     assert CaptionCache(tmp_path / "data").rows() == []
     assert [r["caption"] for r in rows] == [
-        "mock caption of 3 frames, one person, over 8.0s, daylight"] * 2
+        "mock caption of 3 frames, one person, over 8.0s, daylight, mock things"] * 2
 
     bad = CliRunner().invoke(main, [
         "--data-dir", str(tmp_path / "data"), "caption", str(synthetic_video.parent),
@@ -517,6 +519,68 @@ def test_light_is_held_to_its_enum():
     assert all(parse_axes('{"light": "%s"}' % L)["light"] == L for L in LIGHTS)
 
 
+def test_things_takes_the_rest_of_the_line_and_a_short_reply_leaves_it_unclear():
+    full = parse_axes("swimming, a woman, pink salt lake, sunny, pink water; pier, boat")
+    assert full["light"] == "sunny"
+    assert full["things"] == "pink water; pier, boat"
+    assert parse_axes("vault over a rail, one person, park, sunny")["things"] == "unclear"
+    assert parse_axes('{"action": "climbing", "things": "stone tower"}')["things"] == "stone tower"
+
+
+def replies(*texts):
+    """A client whose successive requests get successive replies."""
+    client = fake_client()
+    queue = list(texts)
+
+    def create(**kwargs):
+        client.messages.calls.append(kwargs)
+        block = types.SimpleNamespace(type="text", text=queue.pop(0))
+        return types.SimpleNamespace(content=[block])
+
+    client.messages.create = create
+    return client
+
+
+SEMICOLONS = "cliff diving;a man;rocky cliffs;sunny;ocean waves"
+
+
+def test_a_reply_missing_an_axis_is_asked_again():
+    client = replies(SEMICOLONS, "cliff diving, a man, rocky cliffs, sunny, ocean waves")
+    be = ClaudeCaptionBackend("claude-haiku-4-5", client=client)
+    assert be.caption(frames(8), span=8.0)["who"] == "a man"
+    assert len(client.messages.calls) == 2 and be.unfilled == 0
+
+
+def test_a_second_miss_is_stored_and_counted():
+    client = replies(SEMICOLONS, SEMICOLONS)
+    be = ClaudeCaptionBackend("claude-haiku-4-5", client=client)
+    assert be.caption(frames(8), span=8.0)["who"] == "unclear"
+    assert len(client.messages.calls) == 2 and be.unfilled == 1
+
+
+def test_an_unclear_the_model_wrote_fills_its_axis():
+    assert fills_axes("unclear, nobody, unclear, unclear, unclear")
+    assert fills_axes('{"action": "a", "who": "b", "scene": "c", "light": "d", "things": "e"}')
+    assert not fills_axes(SEMICOLONS)
+    assert not fills_axes('{"action": "climbing"}')
+
+
+def test_things_is_searchable_and_kept_in_the_cache(tmp_path):
+    axes = parse_axes("climbing, a man, old fort, overcast, stone tower, ladder")
+    assert joined(axes).endswith("overcast, stone tower, ladder")
+    sc = CaptionCache(tmp_path)
+    sc.put("v:0.0", 0.0, 8.0, axes, "m")
+    assert sc.get("v:0.0")["things"] == "stone tower, ladder"
+
+
+def test_shipped_prompts_ask_for_every_axis_in_order():
+    for name in prompt_names():
+        text = load_prompt(name)
+        at = [text.index(f"- {a}:") for a in AXES]
+        assert at == sorted(at), name
+        assert "the five parts" in text, name
+
+
 def test_prompt_comments_are_not_sent_to_the_model():
     text = load_prompt("parkour")
     assert "#" not in text.splitlines()[0]
@@ -529,7 +593,7 @@ def test_clip_level_axes_are_voted_over_the_clip(tmp_path):
             [("a park", "sunny"), ("a park", "sunny"), ("a park", "overcast")]):
         sc.put(f"vid:{i}.0", float(i), float(i) + 8,
                {"action": f"move {i}", "who": "one person",
-                "scene": scene, "light": light}, "mock")
+                "scene": scene, "light": light, "things": "bench"}, "mock")
     sc.vote("vid")
     assert [sc.get(f"vid:{i}.0")["light"] for i in range(3)] == ["sunny"] * 3
     # The window-level axes are untouched.
@@ -541,6 +605,7 @@ def test_an_abstention_never_wins_the_vote(tmp_path):
     sc = CaptionCache(tmp_path)
     for i, light in enumerate(["unclear", "unclear", "night"]):
         sc.put(f"v:{i}.0", float(i), float(i) + 8,
-               {"action": "x", "who": "nobody", "scene": "s", "light": light}, "mock")
+               {"action": "x", "who": "nobody", "scene": "s", "light": light,
+                "things": "t"}, "mock")
     sc.vote("v")
     assert sc.get("v:0.0")["light"] == "night"

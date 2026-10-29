@@ -6,10 +6,10 @@ from lancedb.index import FTS
 from lancedb.query import MatchQuery
 from lancedb.rerankers import RRFReranker
 
+from .captions import AXES
 from .guard import writable
 
 COLUMNS = ["id", "video_id", "path", "t0", "t1", "text"]
-AXIS_COLUMNS = ["action", "who", "scene", "light"]
 
 
 class SegmentStore:
@@ -151,5 +151,5 @@ class AxisStore:
             self.db.open_table(self.TABLE)
             .search().where(f"id IN ({quoted})").limit(len(ids)).to_list()
         )
-        return {r["id"]: {k: r[k] for k in AXIS_COLUMNS} for r in rows}
+        return {r["id"]: {k: r[k] for k in AXES} for r in rows}
 

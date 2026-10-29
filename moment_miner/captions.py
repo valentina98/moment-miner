@@ -42,7 +42,10 @@ SHORT_VIDEO_S = 8.0
 LONG_VIDEO_S = 120.0
 FRAME_WIDTH = 640
 
-AXES = ("action", "who", "scene", "light")
+# The one list of axes: the captions table, the axis table, `mm probe --axis`
+# and the searchable text all follow it. `things` is last because it is a list,
+# and the comma fallback hands the last axis whatever is left.
+AXES = ("action", "who", "scene", "light", "things")
 UNKNOWN = "unclear"
 # Closed set: light is a filter, and a filter with synonyms in it misses rows.
 LIGHTS = ("sunny", "overcast", "golden hour", "dusk/dawn", "night", "floodlit",
@@ -57,14 +60,8 @@ DEFAULT_PROMPT = "general"
 REQUEST_TIMEOUT_S = 60.0
 
 
-def parse_axes(reply: str) -> dict[str, str]:
-    """A model's reply -> one value per axis, never empty.
-
-    JSON is what the shipped prompts ask for, because a named key cannot be
-    mistaken for the one beside it. The comma fallback exists for models that
-    cannot hold a format, and it is positional, so it is the lossy path: a
-    comma inside a value shifts everything after it.
-    """
+def _fields(reply: str) -> dict:
+    """A model's reply -> the values it holds, by axis; a short reply holds fewer."""
     text = reply.strip()
     # The shipped prompts ask for the comma form, not JSON, because the format
     # changes what the model writes: with identical rules, a JSON value came
@@ -81,7 +78,27 @@ def parse_axes(reply: str) -> dict[str, str]:
             got = {}
     else:
         parts = [p.strip() for p in text.split(",")]
+        if len(parts) > len(AXES):
+            parts = parts[:len(AXES) - 1] + [", ".join(parts[len(AXES) - 1:])]
         got = dict(zip(AXES, parts))
+    return got
+
+
+def fills_axes(reply: str) -> bool:
+    """Whether a reply holds a value for every axis -- its format, not its
+    content: an "unclear" the model wrote counts as filled."""
+    got = _fields(reply)
+    return all(str(got.get(a) or "").strip() for a in AXES)
+
+
+def parse_axes(reply: str) -> dict[str, str]:
+    """A model's reply -> one value per axis, never empty.
+
+    The shipped prompts ask for one comma-separated line, read positionally:
+    a comma inside a value shifts everything after it, except in the last
+    axis, which takes the rest of the line. JSON is read by key.
+    """
+    got = _fields(reply)
     axes = {a: str(got.get(a) or UNKNOWN).strip() or UNKNOWN for a in AXES}
     axes["light"] = _light(axes["light"])
     return axes
@@ -157,6 +174,8 @@ class CaptionBackend(ABC):
     """Turns one segment's frames into one line of searchable text."""
 
     name: str
+    # Replies that still missed an axis after a retry, over the backend's life.
+    unfilled: int = 0
 
     @abstractmethod
     def caption(self, frames: np.ndarray, span: float,
@@ -181,7 +200,8 @@ class MockCaptionBackend(CaptionBackend):
                 n_frames: int | None = None, stride: float = 4.0) -> dict[str, str]:
         picked = subsample(frames, span, stride, n_frames)
         return {"action": f"mock caption of {len(picked)} frames",
-                "who": "one person", "scene": f"over {span:.1f}s", "light": "daylight"}
+                "who": "one person", "scene": f"over {span:.1f}s", "light": "daylight",
+                "things": "mock things"}
 
 
 def sample_points(span: float, stride: float) -> list[float]:
@@ -384,19 +404,30 @@ class ClaudeCaptionBackend(CaptionBackend):
         ]
         content.append({"type": "text",
                         "text": self.prompt.format(n=len(picked), span=span)})
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            messages=[{"role": "user", "content": content}],
-        )
-        text = " ".join(
-            b.text.strip() for b in response.content if b.type == "text"
-        ).strip()
+        text = self._ask(content)
+        # A reply missing a field is a format slip, and would be stored with
+        # every later axis "unclear". Replies vary between identical requests,
+        # so one more ask is worth its call; a second miss is counted, so a
+        # model or prompt that changes the format shows in the run's totals.
+        if not fills_axes(text):
+            text = self._ask(content)
+            if not fills_axes(text):
+                self.unfilled += 1
         axes = parse_axes(text)
         # A label is not a sentence, so each value's first character is
         # lowercased here rather than asked for in the prompt: normalising in
         # code is the same for every backend and cannot drift between runs.
         return {a: v[:1].lower() + v[1:] for a, v in axes.items()}
+
+    def _ask(self, content: list[dict]) -> str:
+        response = self.client.messages.create(
+            model=self.model,
+            max_tokens=self.max_tokens,
+            messages=[{"role": "user", "content": content}],
+        )
+        return " ".join(
+            b.text.strip() for b in response.content if b.type == "text"
+        ).strip()
 
 
 def get_caption_backend(name: str, **kwargs) -> CaptionBackend:
@@ -414,18 +445,16 @@ CAPTIONS_DB = "captions.db"
 DEFAULT_SET = "default"
 EXPORT_COLUMNS = ["id", "video_id", "t0", "t1", *AXES, "caption", "model", "written"]
 
-_SCHEMA = """
+_AXIS_LIST = ", ".join(AXES)
+_AXIS_COLUMNS = "".join(f"    {a} TEXT NOT NULL,\n" for a in AXES)
+_SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS captions (
     caption_set TEXT NOT NULL,
     id TEXT NOT NULL,
     video_id TEXT NOT NULL,
     t0 REAL NOT NULL,
     t1 REAL NOT NULL,
-    action TEXT NOT NULL,
-    who TEXT NOT NULL,
-    scene TEXT NOT NULL,
-    light TEXT NOT NULL,
-    caption TEXT NOT NULL,
+{_AXIS_COLUMNS}    caption TEXT NOT NULL,
     model TEXT NOT NULL,
     written TEXT NOT NULL,
     PRIMARY KEY (caption_set, id)
@@ -461,7 +490,7 @@ class CaptionCache:
 
     def get(self, seg_id: str) -> dict[str, str] | None:
         row = self.conn.execute(
-            "SELECT action, who, scene, light FROM captions WHERE caption_set = ? AND id = ?",
+            f"SELECT {_AXIS_LIST} FROM captions WHERE caption_set = ? AND id = ?",
             (self.caption_set, seg_id)).fetchone()
         return dict(row) if row else None
 
@@ -469,9 +498,9 @@ class CaptionCache:
             model: str) -> None:
         with self.conn:
             self.conn.execute(
-                "INSERT OR REPLACE INTO captions (caption_set, id, video_id, t0, t1, "
-                "action, who, scene, light, caption, model, written) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                f"INSERT OR REPLACE INTO captions (caption_set, id, video_id, t0, t1, "
+                f"{_AXIS_LIST}, caption, model, written) "
+                f"VALUES ({', '.join('?' * (len(AXES) + 8))})",
                 (self.caption_set, seg_id, seg_id.split(":")[0], t0, t1,
                  *(axes[a] for a in AXES), joined(axes), model, date.today().isoformat()))
 
