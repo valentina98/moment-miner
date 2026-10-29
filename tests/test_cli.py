@@ -84,6 +84,14 @@ def _mm(data_dir, *args):
     return CliRunner().invoke(main, ["--data-dir", str(data_dir), *args])
 
 
+def test_index_of_a_folder_with_no_videos_fails_naming_it(tmp_path):
+    empty = tmp_path / "unmounted"
+    empty.mkdir()
+    result = _mm(tmp_path / "mm_data", "index", str(empty), "--backend", "mock", "--no-asr")
+    assert result.exit_code == 1
+    assert f"no videos found under {empty}" in result.output
+
+
 def _indexed(tmp_path, synthetic_video):
     data_dir = tmp_path / "mm_data"
     result = _mm(data_dir, "index", str(synthetic_video.parent), "--backend", "mock",
