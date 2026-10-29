@@ -10,7 +10,7 @@ Label it for a search index: what someone would type to find this clip again, no
 Reply with one line and nothing else: the five parts below, comma-separated, in this order. Every part is filled.
 
 - action: what happens, named as a thing rather than as someone doing it: "cutting the cake", not "person cutting the cake". 2-6 words. If nothing happens, the scene's state: "empty car park".
-- who: nobody, a woman, a man, a girl, a boy, two women, a man and a woman, a group.
+- who: nobody, a woman, a man, a girl, a boy, two people, a man and a woman, a group.
 - scene: where it is, 2-8 words, concrete enough to search: "beach with a stone pier", not "outdoors".
 - light: one of: sunny, overcast, golden hour, dusk/dawn, night, floodlit, indoors.
 - things: up to four things in view that someone might search for, most noticeable first, separated by semicolons: landmarks, buildings, vehicles, animals, water, a colour that stands out. "pink lake; stone tower; rowing boat".
