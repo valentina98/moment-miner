@@ -20,6 +20,7 @@ from moment_miner.captions import (
     still_times,
     subsample,
     LIGHTS,
+    fills_axes,
     joined,
     load_prompt,
     parse_axes,
@@ -375,7 +376,7 @@ def test_caption_pass_over_an_existing_index(tmp_path, synthetic_video):
     counts = caption_indexed(manifest, store, be, synthetic_video.parent,
                              frame_w=200, frame_h=120, data_dir=tmp_path / "data", log=lambda *a: None)
 
-    assert counts["captioned"] == len(before) == 2
+    assert counts["captioned"] == len(before) == 2 and counts["unfilled"] == 0
     rows = store.table.search().limit(100).to_list()
     assert all(r["text"] == "kong vault over a rail, unclear, unclear, unclear, unclear"
                for r in rows)
@@ -524,6 +525,44 @@ def test_things_takes_the_rest_of_the_line_and_a_short_reply_leaves_it_unclear()
     assert full["things"] == "pink water; pier, boat"
     assert parse_axes("vault over a rail, one person, park, sunny")["things"] == "unclear"
     assert parse_axes('{"action": "climbing", "things": "stone tower"}')["things"] == "stone tower"
+
+
+def replies(*texts):
+    """A client whose successive requests get successive replies."""
+    client = fake_client()
+    queue = list(texts)
+
+    def create(**kwargs):
+        client.messages.calls.append(kwargs)
+        block = types.SimpleNamespace(type="text", text=queue.pop(0))
+        return types.SimpleNamespace(content=[block])
+
+    client.messages.create = create
+    return client
+
+
+SEMICOLONS = "cliff diving;a man;rocky cliffs;sunny;ocean waves"
+
+
+def test_a_reply_missing_an_axis_is_asked_again():
+    client = replies(SEMICOLONS, "cliff diving, a man, rocky cliffs, sunny, ocean waves")
+    be = ClaudeCaptionBackend("claude-haiku-4-5", client=client)
+    assert be.caption(frames(8), span=8.0)["who"] == "a man"
+    assert len(client.messages.calls) == 2 and be.unfilled == 0
+
+
+def test_a_second_miss_is_stored_and_counted():
+    client = replies(SEMICOLONS, SEMICOLONS)
+    be = ClaudeCaptionBackend("claude-haiku-4-5", client=client)
+    assert be.caption(frames(8), span=8.0)["who"] == "unclear"
+    assert len(client.messages.calls) == 2 and be.unfilled == 1
+
+
+def test_an_unclear_the_model_wrote_fills_its_axis():
+    assert fills_axes("unclear, nobody, unclear, unclear, unclear")
+    assert fills_axes('{"action": "a", "who": "b", "scene": "c", "light": "d", "things": "e"}')
+    assert not fills_axes(SEMICOLONS)
+    assert not fills_axes('{"action": "climbing"}')
 
 
 def test_things_is_searchable_and_kept_in_the_cache(tmp_path):

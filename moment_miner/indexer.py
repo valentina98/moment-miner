@@ -232,6 +232,7 @@ def caption_indexed(
         if r["path"].startswith(prefix):
             by_path[r["path"]].append(r)
     counts = {"videos": 0, "captioned": 0, "reused": 0, "errors": 0}
+    unfilled_before = caption_backend.unfilled
     for i, (path, rows) in enumerate(sorted(by_path.items()), 1):
         log(f"[{i}/{len(by_path)}] {on_host(path)} ({len(rows)} segments)")
         recorded = manifest.recorded_settings(path)
@@ -284,6 +285,7 @@ def caption_indexed(
             if axis_store is not None:
                 axis_store.delete_path(path)
                 axis_store.add(axis_rows)
+    counts["unfilled"] = caption_backend.unfilled - unfilled_before
     if counts["captioned"] or counts["reused"]:
         store.rebuild_fts()
     return counts

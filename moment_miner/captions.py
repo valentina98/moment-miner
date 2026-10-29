@@ -60,13 +60,8 @@ DEFAULT_PROMPT = "general"
 REQUEST_TIMEOUT_S = 60.0
 
 
-def parse_axes(reply: str) -> dict[str, str]:
-    """A model's reply -> one value per axis, never empty.
-
-    The shipped prompts ask for one comma-separated line, read positionally:
-    a comma inside a value shifts everything after it, except in the last
-    axis, which takes the rest of the line. JSON is read by key.
-    """
+def _fields(reply: str) -> dict:
+    """A model's reply -> the values it holds, by axis; a short reply holds fewer."""
     text = reply.strip()
     # The shipped prompts ask for the comma form, not JSON, because the format
     # changes what the model writes: with identical rules, a JSON value came
@@ -86,6 +81,24 @@ def parse_axes(reply: str) -> dict[str, str]:
         if len(parts) > len(AXES):
             parts = parts[:len(AXES) - 1] + [", ".join(parts[len(AXES) - 1:])]
         got = dict(zip(AXES, parts))
+    return got
+
+
+def fills_axes(reply: str) -> bool:
+    """Whether a reply holds a value for every axis -- its format, not its
+    content: an "unclear" the model wrote counts as filled."""
+    got = _fields(reply)
+    return all(str(got.get(a) or "").strip() for a in AXES)
+
+
+def parse_axes(reply: str) -> dict[str, str]:
+    """A model's reply -> one value per axis, never empty.
+
+    The shipped prompts ask for one comma-separated line, read positionally:
+    a comma inside a value shifts everything after it, except in the last
+    axis, which takes the rest of the line. JSON is read by key.
+    """
+    got = _fields(reply)
     axes = {a: str(got.get(a) or UNKNOWN).strip() or UNKNOWN for a in AXES}
     axes["light"] = _light(axes["light"])
     return axes
@@ -161,6 +174,8 @@ class CaptionBackend(ABC):
     """Turns one segment's frames into one line of searchable text."""
 
     name: str
+    # Replies that still missed an axis after a retry, over the backend's life.
+    unfilled: int = 0
 
     @abstractmethod
     def caption(self, frames: np.ndarray, span: float,
@@ -389,19 +404,30 @@ class ClaudeCaptionBackend(CaptionBackend):
         ]
         content.append({"type": "text",
                         "text": self.prompt.format(n=len(picked), span=span)})
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            messages=[{"role": "user", "content": content}],
-        )
-        text = " ".join(
-            b.text.strip() for b in response.content if b.type == "text"
-        ).strip()
+        text = self._ask(content)
+        # A reply missing a field is a format slip, and would be stored with
+        # every later axis "unclear". Replies vary between identical requests,
+        # so one more ask is worth its call; a second miss is counted, so a
+        # model or prompt that changes the format shows in the run's totals.
+        if not fills_axes(text):
+            text = self._ask(content)
+            if not fills_axes(text):
+                self.unfilled += 1
         axes = parse_axes(text)
         # A label is not a sentence, so each value's first character is
         # lowercased here rather than asked for in the prompt: normalising in
         # code is the same for every backend and cannot drift between runs.
         return {a: v[:1].lower() + v[1:] for a, v in axes.items()}
+
+    def _ask(self, content: list[dict]) -> str:
+        response = self.client.messages.create(
+            model=self.model,
+            max_tokens=self.max_tokens,
+            messages=[{"role": "user", "content": content}],
+        )
+        return " ".join(
+            b.text.strip() for b in response.content if b.type == "text"
+        ).strip()
 
 
 def get_caption_backend(name: str, **kwargs) -> CaptionBackend:
