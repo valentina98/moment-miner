@@ -247,7 +247,8 @@ def _frame_size(ctx, param, value):
 @click.option("--caption-frames", default=None, type=int,
               help="Force the stills sent per segment. By default the count "
                    "follows from the segment's span and the indexed stride. "
-                   "Each still is ~170 input tokens, the dominant cost of a "
+                   "Each still is about width x height / 750 input tokens "
+                   "(~300 at the default 640x360), the dominant cost of a "
                    "caption pass.")
 @click.option("--caption-frames-short", default=None, type=int,
               help="Force the count for short videos instead.")
