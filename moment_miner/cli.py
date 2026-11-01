@@ -83,12 +83,16 @@ def help_cmd(ctx, command):
 @click.option("--estimate/--no-estimate", default=True, show_default=True,
               help="Print an ETA first. The first run on a machine measures its "
                    "speed once on 24 s of the first video (`mm calibrate`).")
+@click.option("--skip", multiple=True, metavar="PATTERN",
+              help="Leave out videos matching PATTERN, written as in .gitignore and "
+                   "matched against the path under FOLDER: `edited/`, `2M4A7515.MP4`, "
+                   "`*-merged-*`. Repeatable. A video already indexed that matches is "
+                   "removed from the index.")
 @click.pass_obj
-def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex, estimate):
+def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex, estimate, skip):
     """Scan FOLDER recursively and index new, changed and failed videos.
 
-    Skips the clips this tool exported and LosslessCut exports saved beside
-    their source.
+    Skips the clips this tool exported, and videos matching --skip.
 
     Never captions and never spends: `mm caption` does that. A re-indexed
     segment keeps the captions it already had.
@@ -99,16 +103,19 @@ def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex, es
     from .indexer import index_pending, index_settings
 
     manifest = Manifest(data_dir / "manifest.db")
-    counts = manifest.scan(folder)
+    counts = manifest.scan(folder, skip)
     if reindex:
         manifest.reset(folder)
     be = get_backend(backend)
     _forget_missing(manifest, counts, data_dir, be.name, folder)
+    excluded = counts.pop("excluded")
+    _forget(manifest, excluded, data_dir, be.name, "matches --skip")
+    counts["removed"] += len(excluded)
     skipped = counts["skipped"]
     counts["skipped"] = len(skipped)
     click.echo(f"scan: {counts}")
     for parent, n in sorted(Counter(str(Path(p).parent) for p in skipped).items()):
-        click.echo(f"skipped: {n} LosslessCut export(s) beside their source in {on_host(parent)}")
+        click.echo(f"skipped: {n} video(s) matching --skip in {on_host(parent)}")
     settings = index_settings(be.name, window, stride)
     _report_stale_elsewhere(manifest, settings, folder)
     pending = manifest.pending(settings, folder)
@@ -195,15 +202,22 @@ def _forget_missing(manifest, counts, data_dir, backend_name, folder):
         click.echo(f"kept: all {len(missing)} indexed video(s) under {on_host(folder)} are "
                    "missing -- a different mount root? Nothing removed.")
         return
+    _forget(manifest, missing, data_dir, backend_name, "file no longer on disk")
+    counts["removed"] = len(missing)
+
+
+def _forget(manifest, paths, data_dir, backend_name, why):
+    """Drop videos from the manifest and the index. Their captions stay cached."""
+    if not paths:
+        return
     stores = [SegmentStore(data_dir, backend_name), AxisStore(data_dir)]
-    for path in missing:
+    for path in paths:
         for store in stores:
             store.delete_path(path)
         manifest.forget(path)
-        click.echo(f"removed: {on_host(path)} (file no longer on disk)")
+        click.echo(f"removed: {on_host(path)} ({why})")
     if stores[0].count():
         stores[0].rebuild_fts()
-    counts["removed"] = len(missing)
 
 
 def _report_stale_elsewhere(manifest, settings, folder):
