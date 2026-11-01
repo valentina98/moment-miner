@@ -2,7 +2,10 @@ import hashlib
 import os
 import sqlite3
 import time
+from collections.abc import Iterable
 from pathlib import Path
+
+import pathspec
 
 from .guard import writable
 from .hostpaths import on_host
@@ -92,19 +95,27 @@ class Manifest:
             self.conn.execute("INSERT OR IGNORE INTO exports (path) VALUES (?)",
                               (on_host(Path(path).resolve()),))
 
-    def scan(self, folder: str | Path) -> dict:
+    def scan(self, folder: str | Path, skip: Iterable[str] = ()) -> dict:
         """Register new/changed videos under folder. Returns counts.
 
-        `missing` lists known videos under folder whose file is gone; the
-        caller decides whether to `forget` them.
+        `skip` holds .gitignore-style patterns, matched against each video's
+        path relative to folder; a match is never indexed. `skipped` lists the
+        matches, and `excluded` those of them still in the index, for the
+        caller to forget. `missing` lists known videos under folder whose file
+        is gone; the caller decides whether to `forget` them.
         """
         counts = {"new": 0, "changed": 0, "unchanged": 0}
         exported = {r[0] for r in self.conn.execute("SELECT path FROM exports")}
-        seen = set()
-        for p in sorted(Path(folder).resolve().rglob("*")):
+        root = Path(folder).resolve()
+        spec = pathspec.GitIgnoreSpec.from_lines(skip)
+        seen, skipped = set(), set()
+        for p in sorted(root.rglob("*")):
             if not p.is_file() or p.suffix.lower() not in VIDEO_EXTS or p.name.startswith(PARTIAL):
                 continue
             if on_host(p) in exported:
+                continue
+            if spec.match_file(p.relative_to(root).as_posix()):
+                skipped.add(str(p))
                 continue
             seen.add(str(p))
             st = p.stat()
@@ -129,10 +140,11 @@ class Manifest:
                     (str(p), vid, st.st_size, st.st_mtime),
                 )
         prefix = _prefix(folder)
-        counts["missing"] = [
-            r["path"] for r in self.conn.execute("SELECT path FROM videos ORDER BY path")
-            if r["path"].startswith(prefix) and r["path"] not in seen
-        ]
+        known = [r["path"] for r in self.conn.execute("SELECT path FROM videos ORDER BY path")
+                 if r["path"].startswith(prefix)]
+        counts["missing"] = [p for p in known if p not in seen and p not in skipped]
+        counts["skipped"] = sorted(skipped)
+        counts["excluded"] = [p for p in known if p in skipped]
         return counts
 
     def forget(self, path: str):

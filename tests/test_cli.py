@@ -248,6 +248,25 @@ def test_every_video_missing_looks_like_a_new_mount_and_removes_nothing(tmp_path
 
 
 @requires_ffmpeg
+def test_index_skip_removes_an_indexed_video_and_says_so(tmp_path, synthetic_video):
+    from moment_miner.store import SegmentStore
+    data_dir = tmp_path / "mm_data"
+
+    def index(*args):
+        return CliRunner().invoke(main, ["--data-dir", str(data_dir), "index",
+                                         str(synthetic_video.parent), "--backend", "mock",
+                                         "--no-asr", "--no-estimate", *args])
+
+    assert index().exit_code == 0
+    assert SegmentStore(data_dir, "mock").count() > 0
+    r = index("--skip", synthetic_video.name)
+    assert r.exit_code == 0, r.output
+    assert "test_video.mp4 (matches --skip)" in r.output
+    assert "skipped: 1 video(s) matching --skip" in r.output
+    assert SegmentStore(data_dir, "mock").count() == 0
+
+
+@requires_ffmpeg
 def test_eval_scores_the_labels_in_the_data_folder_and_names_the_file(tmp_path, synthetic_video):
     data_dir = tmp_path / "mm_data"
 
