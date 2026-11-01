@@ -94,7 +94,7 @@ def test_a_calibration_timeout_drops_the_estimate_not_the_run(monkeypatch, capsy
     monkeypatch.setattr(calibrate, "calibrate", _hangs)
     backend = type("Backend", (), {"name": "mock"})()
     assert cli._estimate("data", backend, [{"path": "hang.mp4"}], 4.0, 2.0,
-                         False) == (None, {})
+                         False) == (None, None, {})
     assert "estimate: unavailable" in capsys.readouterr().out
 
 
@@ -152,7 +152,7 @@ def test_the_estimate_hands_a_file_it_cannot_probe_to_the_index_pass(
     monkeypatch.setattr(calibrate, "load_rate", lambda *a: {"s_per_segment": 1.0})
     monkeypatch.setattr(calibrate, "probe", probe)
     backend = type("Backend", (), {"name": "mock"})()
-    eta, failed = cli._estimate("data", backend, manifest.pending(), 4.0, 2.0, False)
+    eta, _, failed = cli._estimate("data", backend, manifest.pending(), 4.0, 2.0, False)
     assert eta is not None
     assert list(failed) == [str(archive / "hang.mp4")]
     assert "FFmpegTimeout" in failed[str(archive / "hang.mp4")]

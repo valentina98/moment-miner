@@ -13,6 +13,7 @@ dependencies = [
     "json5>=0.9",
     "lancedb>=0.15",
     "numpy>=1.26",
+    "tqdm>=4.60",
 ]
 
 [project.optional-dependencies]
