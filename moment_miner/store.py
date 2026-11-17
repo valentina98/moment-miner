@@ -70,8 +70,9 @@ class SegmentStore:
     def search(self, vec: np.ndarray, query: str, k: int = 50,
                where: str | None = None) -> list[dict]:
         """The `k` best of the vector and full-text rankings fused by
-        reciprocal rank (K=60), as `score`. `where` filters both rankings
-        before they are cut to `k`."""
+        reciprocal rank (K=60), as `score`, with each row's own BM25 score as
+        `text_score` (0 when only the vector ranking found it). `where`
+        filters both rankings before they are cut to `k`."""
         q = (
             self.table.search(query_type="hybrid")
             .vector(np.asarray(vec, dtype=np.float32))
@@ -79,14 +80,13 @@ class SegmentStore:
             # phrase fails for want of token positions, and it needs a
             # full-text index; this scans rows no index covers yet.
             .text(MatchQuery(query, "text"))
-            .rerank(RRFReranker())
+            .rerank(RRFReranker(return_score="all"))
             .limit(k)
         )
         if where:
             q = q.where(where)
-        # No select(): naming the columns makes lance warn on every query that
-        # the rankings' own score columns were left out.
-        return [dict({c: r[c] for c in COLUMNS}, score=r["_relevance_score"])
+        return [dict({c: r[c] for c in COLUMNS}, score=r["_relevance_score"],
+                     text_score=r["_score"] or 0.0)
                 for r in q.to_list()]
 
     def count(self) -> int:

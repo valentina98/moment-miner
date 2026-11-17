@@ -7,7 +7,7 @@ from .embeddings.base import EmbeddingBackend
 from .search import search as run_search
 from .store import SegmentStore
 
-RESULT_FIELDS = ("path", "t0", "t1", "score", "text")
+RESULT_FIELDS = ("path", "t0", "t1", "score", "captions")
 
 
 def make_server(

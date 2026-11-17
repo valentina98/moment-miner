@@ -74,6 +74,34 @@ def test_merge_overlapping():
     merged = merge_overlapping(hits)
     assert len(merged) == 3
     assert merged[0]["t0"] == 4.0 and merged[0]["t1"] == 16.0
+    assert merged[0]["captions"] == []
+
+
+def test_each_row_keeps_its_own_text_score(tmp_path):
+    be = MockBackend()
+    store = SegmentStore(tmp_path, be.name)
+    store.add(_rows(be, ["cliff diving preparation", "cliff jumping", "walking on a beach"]))
+    store.rebuild_fts()
+    rows = store.search(be.embed_text(["cliff jump"])[0], "cliff jump")
+    scores = {r["text"]: r["text_score"] for r in rows}
+    assert scores["cliff jumping"] > scores["cliff diving preparation"] > 0
+    assert scores["walking on a beach"] == 0.0
+
+
+def test_a_merged_hit_lists_every_caption_best_text_match_first():
+    hits = [
+        {"id": "1", "video_id": "v", "t0": 0.0, "t1": 8.0, "score": 0.9,
+         "text": "cliff diving preparation", "text_score": 0.44},
+        {"id": "2", "video_id": "v", "t0": 4.0, "t1": 12.0, "score": 0.5,
+         "text": "standing on a rock", "text_score": 0.0},
+        {"id": "3", "video_id": "v", "t0": 8.0, "t1": 16.0, "score": 0.4,
+         "text": "cliff jumping", "text_score": 1.45},
+    ]
+    (hit,) = merge_overlapping(hits)
+    assert (hit["t0"], hit["t1"]) == (0.0, 16.0)
+    assert [c["text"] for c in hit["captions"]] == [
+        "cliff jumping", "cliff diving preparation", "standing on a rock"]
+    assert hit["captions"][0] == {"t0": 8.0, "t1": 16.0, "text": "cliff jumping"}
 
 
 def test_mock_backend_deterministic():
