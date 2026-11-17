@@ -441,7 +441,8 @@ def _messages_api(cred_file, accept, refresh_to, refresh_after=0.0):
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_POST(self):
             self.rfile.read(int(self.headers["Content-Length"]))
-            token = self.headers["Authorization"].removeprefix("Bearer ")
+            token = (self.headers.get("Authorization", "").removeprefix("Bearer ")
+                     or self.headers.get("x-api-key"))
             seen.append(token)
             if token == accept:
                 code, body = 200, {
@@ -483,6 +484,25 @@ def test_a_refreshed_token_is_waited_for_and_the_request_retried(tmp_path, monke
         server.shutdown()
     assert out["action"] == "kong vault over a rail"
     assert seen == ["oauth-value", "new-token"]
+
+
+def test_a_refused_token_never_switches_the_run_to_the_paid_key(tmp_path, monkeypatch):
+    from moment_miner import captions
+
+    monkeypatch.setattr(captions, "TOKEN_REFRESH_WAIT_S", 0.5)
+    cred = tmp_path / ".credentials.json"
+    cred.write_text(json.dumps(CLAUDE_CREDS))
+    server, seen = _messages_api(cred, accept="sk-paid", refresh_to=None)
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", f"http://127.0.0.1:{server.server_address[1]}")
+    be = ClaudeCaptionBackend(
+        "claude-haiku-4-5", allow_paid=True, paid_budget_usd=2.0,
+        env={"CLAUDE_CONFIG_DIR": str(tmp_path), "ANTHROPIC_API_KEY": "sk-paid"})
+    try:
+        with pytest.raises(MissingCaptionCredentials, match="never switches"):
+            be.caption(frames(8), span=8.0)
+    finally:
+        server.shutdown()
+    assert seen == ["oauth-value"]
 
 
 @requires_ffmpeg

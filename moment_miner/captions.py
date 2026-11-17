@@ -368,7 +368,16 @@ class ClaudeCaptionBackend(CaptionBackend):
         if self._client is None:
             import anthropic
 
-            self._built_with = self._credentials()
+            creds = self._credentials()
+            # The token spends session quota and the key spends money, so a run
+            # stays on the route it started on.
+            if self._built_with and creds.keys() != self._built_with.keys():
+                raise MissingCaptionCredentials(
+                    "the captioning credentials changed route during the run; a run "
+                    "never switches between the subscription token and "
+                    "ANTHROPIC_API_KEY. Rerun `mm caption`; the captions bought so "
+                    "far are kept.")
+            self._built_with = creds
             kwargs = dict(self._built_with)
             if "auth_token" in kwargs:
                 kwargs["default_headers"] = {"anthropic-beta": "oauth-2025-04-20"}
