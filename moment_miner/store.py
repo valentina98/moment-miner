@@ -89,9 +89,20 @@ class SegmentStore:
         # own score columns were left out, and `text_score` reads one of them.
         # return_score="all" keeps `_score` on a row both rankings found only
         # from lancedb 0.41 (lancedb#4677), hence the pin in pyproject.toml.
+        rows = q.to_list()
+        # The text ranking scores only its own top `k`, so a row the vector
+        # ranking alone brought in is scored here, by the same full-text query.
+        unscored = [r["id"] for r in rows if r["_score"] is None]
+        own = {}
+        if unscored:
+            quoted = ", ".join("'{}'".format(i.replace("'", "''")) for i in unscored)
+            own = {r["id"]: r["_score"] for r in
+                   self.table.search(MatchQuery(query, "text"), query_type="fts")
+                   .where(f"id IN ({quoted})", prefilter=True)
+                   .limit(len(unscored)).to_list()}
         return [dict({c: r[c] for c in COLUMNS}, score=r["_relevance_score"],
-                     text_score=r["_score"] or 0.0)
-                for r in q.to_list()]
+                     text_score=r["_score"] or own.get(r["id"], 0.0))
+                for r in rows]
 
     def count(self) -> int:
         if self.table_name not in self._names():
