@@ -529,6 +529,16 @@ def test_things_takes_the_rest_of_the_line_and_a_short_reply_leaves_it_unclear()
     assert full["things"] == "pink water; pier, boat"
     assert parse_axes("vault over a rail, one person, park, sunny", GENERAL)["things"] == "unclear"
     assert parse_axes('{"action": "climbing", "things": "stone tower"}', GENERAL)["things"] == "stone tower"
+    listed = '{"action": "climbing", "things": ["stone tower", "ladder"]}'
+    assert parse_axes(listed, GENERAL)["things"] == "stone tower, ladder"
+
+
+def test_a_clip_axis_the_prompt_never_asked_stays_empty_after_the_vote():
+    from moment_miner.captions import vote_clip_axes
+
+    asked = ("action", "things")
+    rows = [parse_axes("climbing, stone tower", asked), parse_axes("climbing, ladder", asked)]
+    assert vote_clip_axes(rows) == {"scene": "", "light": ""}
 
 
 def replies(*texts):

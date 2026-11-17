@@ -117,6 +117,8 @@ def parse_axes(reply: str, asked: tuple[str, ...]) -> dict[str, str]:
     asked axis, which takes the rest of the line. JSON is read by key.
     """
     got = _fields(reply, asked)
+    # A volunteered JSON reply gives a list axis as an array.
+    got = {a: ", ".join(map(str, v)) if isinstance(v, list) else v for a, v in got.items()}
     axes = {a: "" for a in AXES}
     axes.update({a: str(got.get(a) or UNKNOWN).strip() or UNKNOWN for a in asked})
     if "light" in asked:
@@ -148,7 +150,8 @@ def vote_clip_axes(rows: list[dict]) -> dict[str, str]:
     out = {}
     for axis in CLIP_AXES:
         counts = Counter(r[axis] for r in rows if r.get(axis) and r[axis] != UNKNOWN)
-        out[axis] = counts.most_common(1)[0][0] if counts else UNKNOWN
+        asked = any(r.get(axis) for r in rows)
+        out[axis] = counts.most_common(1)[0][0] if counts else (UNKNOWN if asked else "")
     return out
 
 
