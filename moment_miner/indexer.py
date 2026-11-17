@@ -11,6 +11,7 @@ from .captions import (
     frames_for_duration,
     DEFAULT_SET,
     CaptionCache,
+    MissingCaptionCredentials,
     still_times,
 )
 from .embeddings.base import EmbeddingBackend
@@ -264,6 +265,9 @@ def caption_indexed(
                 if text != r["text"]:
                     store.set_text(r["id"], text)
             counts["videos"] += 1
+        except MissingCaptionCredentials:
+            # Every later request would be refused too, so the run stops here.
+            raise
         except Exception as e:
             counts["errors"] += 1
             log(f"    ERROR: {e}")
