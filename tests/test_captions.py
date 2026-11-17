@@ -429,10 +429,10 @@ def test_a_caption_request_that_never_answers_fails_its_video_not_the_pass(
     assert held, "the request never reached the server"
 
 
-def _messages_api(cred_file, accept, refresh_to):
+def _messages_api(cred_file, accept, refresh_to, refresh_after=0.0):
     """A local Messages API that refuses every token but `accept` and, on each
-    refusal, writes `refresh_to` into the credential file the way Claude Code
-    writes a refreshed token as it revokes the old one."""
+    refusal, writes `refresh_to` into the credential file `refresh_after`
+    seconds later, the way a refreshed token reaches the container's copy."""
     import http.server
     import threading
 
@@ -450,7 +450,8 @@ def _messages_api(cred_file, accept, refresh_to):
                     "stop_sequence": None, "usage": {"input_tokens": 1, "output_tokens": 1},
                     "content": [{"type": "text", "text": "kong vault over a rail, a man, plaza, sunny"}]}
             else:
-                cred_file.write_text(json.dumps({"claudeAiOauth": {"accessToken": refresh_to}}))
+                threading.Timer(refresh_after, cred_file.write_text, [
+                    json.dumps({"claudeAiOauth": {"accessToken": refresh_to}})]).start()
                 code, body = 401, {"type": "error", "error": {
                     "type": "authentication_error",
                     "message": "OAuth access token has been revoked"}}
@@ -469,10 +470,11 @@ def _messages_api(cred_file, accept, refresh_to):
     return server, seen
 
 
-def test_a_refreshed_token_is_read_again_and_the_request_retried(tmp_path, monkeypatch):
+def test_a_refreshed_token_is_waited_for_and_the_request_retried(tmp_path, monkeypatch):
     cred = tmp_path / ".credentials.json"
     cred.write_text(json.dumps(CLAUDE_CREDS))
-    server, seen = _messages_api(cred, accept="new-token", refresh_to="new-token")
+    server, seen = _messages_api(cred, accept="new-token", refresh_to="new-token",
+                                 refresh_after=1.5)
     monkeypatch.setenv("ANTHROPIC_BASE_URL", f"http://127.0.0.1:{server.server_address[1]}")
     be = ClaudeCaptionBackend("claude-haiku-4-5", env={"CLAUDE_CONFIG_DIR": str(tmp_path)})
     try:
@@ -485,7 +487,10 @@ def test_a_refreshed_token_is_read_again_and_the_request_retried(tmp_path, monke
 
 @requires_ffmpeg
 def test_a_token_refused_twice_stops_the_caption_run(tmp_path, synthetic_video, monkeypatch):
+    from moment_miner import captions
     from moment_miner.indexer import caption_indexed
+
+    monkeypatch.setattr(captions, "TOKEN_REFRESH_WAIT_S", 0.5)
 
     manifest, store = _indexed(tmp_path, synthetic_video)
     cred = tmp_path / ".credentials.json"

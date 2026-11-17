@@ -16,6 +16,7 @@ import io
 import json
 import os
 import sqlite3
+import time
 from abc import ABC, abstractmethod
 from collections import Counter
 from datetime import date
@@ -55,6 +56,9 @@ DEFAULT_PROMPT = "general"
 # 600 s, retried twice, so a hung request stalled a pass for 30 minutes. A
 # failed request fails its video, and the next pass buys only what is missing.
 REQUEST_TIMEOUT_S = 60.0
+# `make caption` copies a refreshed subscription token into the container's
+# credential file every 5 s, so a refused request waits this long for it.
+TOKEN_REFRESH_WAIT_S = 15.0
 
 
 def parse_axes(reply: str) -> dict[str, str]:
@@ -357,19 +361,37 @@ class ClaudeCaptionBackend(CaptionBackend):
         self._env = env
         self._allow_paid = allow_paid
         self._paid_budget_usd = paid_budget_usd
+        self._built_with: dict = {}
 
     @property
     def client(self):
         if self._client is None:
             import anthropic
 
-            kwargs = resolve_credentials(
-                env=self._env, allow_paid=self._allow_paid,
-                paid_budget_usd=self._paid_budget_usd)
+            self._built_with = self._credentials()
+            kwargs = dict(self._built_with)
             if "auth_token" in kwargs:
                 kwargs["default_headers"] = {"anthropic-beta": "oauth-2025-04-20"}
             self._client = anthropic.Anthropic(timeout=REQUEST_TIMEOUT_S, **kwargs)
         return self._client
+
+    def _credentials(self) -> dict:
+        return resolve_credentials(env=self._env, allow_paid=self._allow_paid,
+                                   paid_budget_usd=self._paid_budget_usd)
+
+    def _wait_for_a_new_token(self) -> None:
+        if "auth_token" not in self._built_with:
+            return
+        deadline = time.monotonic() + TOKEN_REFRESH_WAIT_S
+        while True:
+            try:
+                if self._credentials() != self._built_with:
+                    return
+            except (ValueError, MissingCaptionCredentials):
+                pass  # the file read mid-rewrite
+            if time.monotonic() >= deadline:
+                return
+            time.sleep(min(1.0, TOKEN_REFRESH_WAIT_S))
 
     def preflight(self) -> None:
         self.client
@@ -391,6 +413,7 @@ class ClaudeCaptionBackend(CaptionBackend):
                     ) from e
                 # Claude Code refreshes its subscription token during a long run
                 # and revokes the old one, so the credentials are read again.
+                self._wait_for_a_new_token()
                 self._client = None
 
     def caption(self, frames: np.ndarray, span: float,
