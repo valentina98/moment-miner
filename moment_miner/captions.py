@@ -15,6 +15,7 @@ import csv
 import io
 import json
 import os
+import re
 import sqlite3
 from abc import ABC, abstractmethod
 from collections import Counter
@@ -42,10 +43,16 @@ SHORT_VIDEO_S = 8.0
 LONG_VIDEO_S = 120.0
 FRAME_WIDTH = 640
 
-# The one list of axes: the captions table, the axis table, `mm probe --axis`
-# and the searchable text all follow it. `things` is last because it is a list,
-# and the comma fallback hands the last axis whatever is left.
-AXES = ("action", "who", "scene", "light", "things")
+# Every axis a prompt may ask, in storage order: the captions table, the axis
+# table and `mm probe --axis` have a column for each. Every prompt asks the same
+# core (action, who, scene, light) so those mean the same on all footage; a
+# profile's prompt adds its own axes, and an axis a prompt does not ask is
+# stored empty. A prompt names what it asks in its `- axis:` lines, and the last
+# one takes the rest of a comma-separated reply, so a list axis such as
+# `things` goes last.
+# shortcut: one column per known axis; a profile axis not listed here is
+# refused until the row-per-axis storage (caption-axes plan 4a) is built.
+AXES = ("action", "who", "scene", "light", "things", "move")
 UNKNOWN = "unclear"
 # Closed set: light is a filter, and a filter with synonyms in it misses rows.
 LIGHTS = ("sunny", "overcast", "golden hour", "dusk/dawn", "night", "floodlit",
@@ -60,7 +67,17 @@ DEFAULT_PROMPT = "general"
 REQUEST_TIMEOUT_S = 60.0
 
 
-def _fields(reply: str) -> dict:
+def prompt_axes(prompt: str) -> tuple[str, ...]:
+    """The axes a prompt asks, in its order, from its `- axis:` lines."""
+    asked = tuple(re.findall(r"^- (\w+):", prompt, re.M))
+    unknown = [a for a in asked if a not in AXES]
+    if unknown or not asked:
+        raise ValueError(f"the caption prompt asks {', '.join(unknown) or 'no axis'}; "
+                         f"each `- axis:` line must name one of: {', '.join(AXES)}")
+    return asked
+
+
+def _fields(reply: str, asked: tuple[str, ...]) -> dict:
     """A model's reply -> the values it holds, by axis; a short reply holds fewer."""
     text = reply.strip()
     # The shipped prompts ask for the comma form, not JSON, because the format
@@ -78,29 +95,32 @@ def _fields(reply: str) -> dict:
             got = {}
     else:
         parts = [p.strip() for p in text.split(",")]
-        if len(parts) > len(AXES):
-            parts = parts[:len(AXES) - 1] + [", ".join(parts[len(AXES) - 1:])]
-        got = dict(zip(AXES, parts))
+        if len(parts) > len(asked):
+            parts = parts[:len(asked) - 1] + [", ".join(parts[len(asked) - 1:])]
+        got = dict(zip(asked, parts))
     return got
 
 
-def fills_axes(reply: str) -> bool:
-    """Whether a reply holds a value for every axis -- its format, not its
+def fills_axes(reply: str, asked: tuple[str, ...]) -> bool:
+    """Whether a reply holds a value for every asked axis -- its format, not its
     content: an "unclear" the model wrote counts as filled."""
-    got = _fields(reply)
-    return all(str(got.get(a) or "").strip() for a in AXES)
+    got = _fields(reply, asked)
+    return all(str(got.get(a) or "").strip() for a in asked)
 
 
-def parse_axes(reply: str) -> dict[str, str]:
-    """A model's reply -> one value per axis, never empty.
+def parse_axes(reply: str, asked: tuple[str, ...]) -> dict[str, str]:
+    """A model's reply -> a value for every axis: never empty for an asked
+    axis, empty for one the prompt did not ask.
 
     The shipped prompts ask for one comma-separated line, read positionally:
     a comma inside a value shifts everything after it, except in the last
-    axis, which takes the rest of the line. JSON is read by key.
+    asked axis, which takes the rest of the line. JSON is read by key.
     """
-    got = _fields(reply)
-    axes = {a: str(got.get(a) or UNKNOWN).strip() or UNKNOWN for a in AXES}
-    axes["light"] = _light(axes["light"])
+    got = _fields(reply, asked)
+    axes = {a: "" for a in AXES}
+    axes.update({a: str(got.get(a) or UNKNOWN).strip() or UNKNOWN for a in asked})
+    if "light" in asked:
+        axes["light"] = _light(axes["light"])
     return axes
 
 
@@ -134,7 +154,7 @@ def vote_clip_axes(rows: list[dict]) -> dict[str, str]:
 
 def joined(axes: dict[str, str]) -> str:
     """The searchable one-line form, and what a person reads."""
-    return ", ".join(axes[a] for a in AXES)
+    return ", ".join(axes[a] for a in AXES if axes.get(a))
 
 
 def prompt_names() -> list[str]:
@@ -372,6 +392,7 @@ class ClaudeCaptionBackend(CaptionBackend):
         self.name = model
         self.model = model
         self.prompt = load_prompt(prompt)
+        self.axes = prompt_axes(self.prompt)
         self.max_tokens = max_tokens
         self._client = client
         self._env = env
@@ -409,11 +430,11 @@ class ClaudeCaptionBackend(CaptionBackend):
         # every later axis "unclear". Replies vary between identical requests,
         # so one more ask is worth its call; a second miss is counted, so a
         # model or prompt that changes the format shows in the run's totals.
-        if not fills_axes(text):
+        if not fills_axes(text, self.axes):
             text = self._ask(content)
-            if not fills_axes(text):
+            if not fills_axes(text, self.axes):
                 self.unfilled += 1
-        axes = parse_axes(text)
+        axes = parse_axes(text, self.axes)
         # A label is not a sentence, so each value's first character is
         # lowercased here rather than asked for in the prompt: normalising in
         # code is the same for every backend and cannot drift between runs.
@@ -502,7 +523,7 @@ class CaptionCache:
                 f"{_AXIS_LIST}, caption, model, written) "
                 f"VALUES ({', '.join('?' * (len(AXES) + 8))})",
                 (self.caption_set, seg_id, seg_id.split(":")[0], t0, t1,
-                 *(axes[a] for a in AXES), joined(axes), model, date.today().isoformat()))
+                 *(axes.get(a, "") for a in AXES), joined(axes), model, date.today().isoformat()))
 
     def rows(self, video_ids: list[str] | None = None) -> list[dict]:
         """This set's captions, every one or those of these videos, in time order."""

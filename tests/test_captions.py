@@ -24,10 +24,14 @@ from moment_miner.captions import (
     joined,
     load_prompt,
     parse_axes,
+    prompt_axes,
     prompt_names,
 )
 
+
 from .conftest import requires_ffmpeg
+
+GENERAL = prompt_axes(load_prompt("general"))
 
 
 def frames(n=8, h=48, w=64):
@@ -238,7 +242,7 @@ def test_backend_selection():
 
 def test_cache_is_one_db_in_the_data_folder(tmp_path):
     sc = CaptionCache(tmp_path / "data")
-    sc.put("a:0.0", 0.0, 8.0, parse_axes("a caption"), "claude-haiku-4-5")
+    sc.put("a:0.0", 0.0, 8.0, parse_axes("a caption", GENERAL), "claude-haiku-4-5")
     assert (tmp_path / "data" / "captions.db").is_file()
     [row] = sc.rows()
     assert row["id"] == "a:0.0" and row["video_id"] == "a"
@@ -249,7 +253,7 @@ def test_cache_is_one_db_in_the_data_folder(tmp_path):
 
 def test_a_caption_is_kept_the_moment_it_is_bought(tmp_path):
     """No flush, no close: a pass killed right after `put` still has it."""
-    CaptionCache(tmp_path / "data").put("a:0.0", 0.0, 8.0, parse_axes("cached"), "m")
+    CaptionCache(tmp_path / "data").put("a:0.0", 0.0, 8.0, parse_axes("cached", GENERAL), "m")
     import sqlite3
     other = sqlite3.connect(str(tmp_path / "data" / "captions.db"))
     assert other.execute("SELECT action FROM captions").fetchall() == [("cached",)]
@@ -258,10 +262,10 @@ def test_a_caption_is_kept_the_moment_it_is_bought(tmp_path):
 
 
 def test_caption_sets_are_kept_apart(tmp_path):
-    CaptionCache(tmp_path / "data").put("a:0.0", 0.0, 8.0, parse_axes("one"), "m")
+    CaptionCache(tmp_path / "data").put("a:0.0", 0.0, 8.0, parse_axes("one", GENERAL), "m")
     trial = CaptionCache(tmp_path / "data", "trial")
     assert trial.get("a:0.0") is None
-    trial.put("a:0.0", 0.0, 8.0, parse_axes("two"), "m")
+    trial.put("a:0.0", 0.0, 8.0, parse_axes("two", GENERAL), "m")
     assert CaptionCache(tmp_path / "data").get("a:0.0")["action"] == "one"
     assert trial.sets() == [("default", 1), ("trial", 1)]
 
@@ -269,12 +273,12 @@ def test_caption_sets_are_kept_apart(tmp_path):
 def test_an_exported_set_has_every_column_but_the_set(tmp_path):
     sc = CaptionCache(tmp_path / "data", "trial")
     for t0 in (4.0, 0.0):
-        sc.put(f"a:{t0}", t0, t0 + 8, parse_axes(f"at {t0}"), "m")
+        sc.put(f"a:{t0}", t0, t0 + 8, parse_axes(f"at {t0}", GENERAL), "m")
     assert sc.export(tmp_path / "trial.csv") == 2
     rows = list(csv.DictReader((tmp_path / "trial.csv").open()))
     assert [r["id"] for r in rows] == ["a:0.0", "a:4.0"]
     assert list(rows[0]) == ["id", "video_id", "t0", "t1", "action", "who", "scene",
-                             "light", "things", "caption", "model", "written"]
+                             "light", "things", "move", "caption", "model", "written"]
 
 
 def test_an_unwritable_cache_fails_before_spending(tmp_path, monkeypatch):
@@ -338,7 +342,7 @@ class Recording(MockCaptionBackend):
 
     def caption(self, frames, span, n_frames=None, stride=4.0):
         self.shapes.append(frames.shape)
-        return parse_axes(self.text)
+        return parse_axes(self.text, GENERAL)
 
 
 class Refuses(MockCaptionBackend):
@@ -513,18 +517,18 @@ def test_unknown_prompt_names_the_shipped_ones():
 
 
 def test_light_is_held_to_its_enum():
-    assert parse_axes('{"light": "dusk"}')["light"] == "dusk/dawn"
-    assert parse_axes('{"light": "Sunny"}')["light"] == "sunny"
-    assert parse_axes('{"light": "daylight"}')["light"] == "unclear"
-    assert all(parse_axes('{"light": "%s"}' % L)["light"] == L for L in LIGHTS)
+    assert parse_axes('{"light": "dusk"}', GENERAL)["light"] == "dusk/dawn"
+    assert parse_axes('{"light": "Sunny"}', GENERAL)["light"] == "sunny"
+    assert parse_axes('{"light": "daylight"}', GENERAL)["light"] == "unclear"
+    assert all(parse_axes('{"light": "%s"}' % L, GENERAL)["light"] == L for L in LIGHTS)
 
 
 def test_things_takes_the_rest_of_the_line_and_a_short_reply_leaves_it_unclear():
-    full = parse_axes("swimming, a woman, pink salt lake, sunny, pink water; pier, boat")
+    full = parse_axes("swimming, a woman, pink salt lake, sunny, pink water; pier, boat", GENERAL)
     assert full["light"] == "sunny"
     assert full["things"] == "pink water; pier, boat"
-    assert parse_axes("vault over a rail, one person, park, sunny")["things"] == "unclear"
-    assert parse_axes('{"action": "climbing", "things": "stone tower"}')["things"] == "stone tower"
+    assert parse_axes("vault over a rail, one person, park, sunny", GENERAL)["things"] == "unclear"
+    assert parse_axes('{"action": "climbing", "things": "stone tower"}', GENERAL)["things"] == "stone tower"
 
 
 def replies(*texts):
@@ -559,26 +563,44 @@ def test_a_second_miss_is_stored_and_counted():
 
 
 def test_an_unclear_the_model_wrote_fills_its_axis():
-    assert fills_axes("unclear, nobody, unclear, unclear, unclear")
-    assert fills_axes('{"action": "a", "who": "b", "scene": "c", "light": "d", "things": "e"}')
-    assert not fills_axes(SEMICOLONS)
-    assert not fills_axes('{"action": "climbing"}')
+    assert fills_axes("unclear, nobody, unclear, unclear, unclear", GENERAL)
+    assert fills_axes('{"action": "a", "who": "b", "scene": "c", "light": "d", "things": "e"}', GENERAL)
+    assert not fills_axes(SEMICOLONS, GENERAL)
+    assert not fills_axes('{"action": "climbing"}', GENERAL)
 
 
 def test_things_is_searchable_and_kept_in_the_cache(tmp_path):
-    axes = parse_axes("climbing, a man, old fort, overcast, stone tower, ladder")
+    axes = parse_axes("climbing, a man, old fort, overcast, stone tower, ladder", GENERAL)
     assert joined(axes).endswith("overcast, stone tower, ladder")
     sc = CaptionCache(tmp_path)
     sc.put("v:0.0", 0.0, 8.0, axes, "m")
     assert sc.get("v:0.0")["things"] == "stone tower, ladder"
 
 
-def test_shipped_prompts_ask_for_every_axis_in_order():
+def test_shipped_prompts_ask_the_general_core_word_for_word_then_their_own_axes():
+    core = ("action", "who", "scene", "light")
+    general = load_prompt("general").splitlines()
+    core_lines = [l for l in general if l.startswith(tuple(f"- {a}:" for a in core))]
     for name in prompt_names():
         text = load_prompt(name)
-        at = [text.index(f"- {a}:") for a in AXES]
-        assert at == sorted(at), name
-        assert "the five parts" in text, name
+        asked = prompt_axes(text)
+        assert asked[:4] == core, name
+        assert [l for l in text.splitlines() if l in core_lines] == core_lines, name
+        assert f"the {['four', 'five', 'six'][len(asked) - 4]} parts" in text, name
+
+
+def test_an_axis_the_prompt_does_not_ask_is_empty_and_left_out_of_the_text():
+    parkour = prompt_axes(load_prompt("parkour"))
+    axes = parse_axes("jump over a wall, a man, skate park, sunny, kong vault", parkour)
+    assert axes["move"] == "kong vault" and axes["things"] == ""
+    assert joined(axes) == "jump over a wall, a man, skate park, sunny, kong vault"
+    assert fills_axes("jump over a wall, a man, skate park, sunny, none", parkour)
+    assert not fills_axes("jump over a wall, a man, skate park, sunny", parkour)
+
+
+def test_a_prompt_asking_an_unknown_axis_is_refused():
+    with pytest.raises(ValueError, match="mood"):
+        prompt_axes("- action: what happens\n- mood: how it feels\n")
 
 
 def test_prompt_comments_are_not_sent_to_the_model():

@@ -172,7 +172,7 @@ def test_a_reindex_keeps_the_stored_captions(tmp_path, synthetic_video):
 
     data_dir = _indexed(tmp_path, synthetic_video)
     axes = {"action": "kong vault", "who": "one person", "scene": "park", "light": "sunny",
-            "things": "rail"}
+            "things": "rail", "move": ""}
     AxisStore(data_dir).add([{"id": s["id"], "path": s["path"], "t0": s["t0"], "t1": s["t1"], **axes}
                              for s in SegmentStore(data_dir, "mock").segments()])
     Manifest(data_dir / "manifest.db").reset(synthetic_video.parent)

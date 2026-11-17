@@ -300,7 +300,7 @@ def test_a_reindex_without_captioning_keeps_the_stored_captions(indexable, tmp_p
                   log=lambda *_: None)
     segs = store.segments()
     axes = {"action": "kong vault", "who": "one person", "scene": "park", "light": "sunny",
-            "things": "rail"}
+            "things": "rail", "move": ""}
     axis_store.add([{"id": s["id"], "path": s["path"], "t0": s["t0"], "t1": s["t1"], **axes}
                     for s in segs])
     manifest.reset(tmp_path / "archive")
