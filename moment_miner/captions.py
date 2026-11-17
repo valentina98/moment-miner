@@ -73,11 +73,12 @@ TOKEN_REFRESH_WAIT_S = 15.0
 
 def prompt_axes(prompt: str) -> tuple[str, ...]:
     """The axes a prompt asks, in its order, from its `- axis:` lines."""
-    asked = tuple(re.findall(r"^- (\w+):", prompt, re.M))
-    unknown = [a for a in asked if a not in AXES]
-    if unknown or not asked:
-        raise ValueError(f"the caption prompt asks {', '.join(unknown) or 'no axis'}; "
-                         f"each `- axis:` line must name one of: {', '.join(AXES)}")
+    asked = tuple(re.findall(r"^- ([^\s:]+):", prompt, re.M))
+    wrong = [a for a in asked if a not in AXES] + [
+        f"{a} twice" for a in dict.fromkeys(asked) if asked.count(a) > 1]
+    if wrong or not asked:
+        raise ValueError(f"the caption prompt asks {', '.join(wrong) or 'no axis'}; "
+                         f"each `- axis:` line must name one of {', '.join(AXES)}, once")
     return asked
 
 
@@ -391,7 +392,8 @@ def resolve_credentials(env=None, config_dir=None, *, allow_paid: bool = False,
 
 
 class ClaudeCaptionBackend(CaptionBackend):
-    """Hosted Claude. One request per segment, three stills per request."""
+    """Hosted Claude. One request per segment, with the stills `subsample` picks,
+    sent once more when the reply misses an asked axis."""
 
     def __init__(self, model: str, max_tokens: int = 200, client=None, env=None,
                  allow_paid: bool = False, paid_budget_usd: float | None = None,

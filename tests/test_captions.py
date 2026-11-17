@@ -707,9 +707,14 @@ def test_an_axis_the_prompt_does_not_ask_is_empty_and_left_out_of_the_text():
     assert not fills_axes("jump over a wall, a man, skate park, sunny", parkour)
 
 
-def test_a_prompt_asking_an_unknown_axis_is_refused():
-    with pytest.raises(ValueError, match="mood"):
-        prompt_axes("- action: what happens\n- mood: how it feels\n")
+@pytest.mark.parametrize("line, named", [
+    ("- mood: how it feels", "mood"),
+    ("- shot-type: how it is framed", "shot-type"),
+    ("- action: what happens, again", "action twice"),
+])
+def test_a_prompt_asking_an_unknown_or_repeated_axis_is_refused(line, named):
+    with pytest.raises(ValueError, match=named):
+        prompt_axes(f"- action: what happens\n{line}\n")
 
 
 def test_prompt_comments_are_not_sent_to_the_model():
