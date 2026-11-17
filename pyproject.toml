@@ -11,7 +11,7 @@ dependencies = [
     "click>=8.1",
     # LosslessCut saves its projects as JSON5.
     "json5>=0.9",
-    "lancedb>=0.15",
+    "lancedb>=0.41",
     "numpy>=1.26",
     "tqdm>=4.60",
 ]

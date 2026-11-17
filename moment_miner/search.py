@@ -23,8 +23,12 @@ def merge_overlapping(hits: list[dict]) -> list[dict]:
             kept.append(dict(h, merged=[h]))
     for k_ in kept:
         best_first = sorted(k_.pop("merged"), key=lambda h: -h.get("text_score", 0.0))
-        k_["captions"] = [{"t0": h["t0"], "t1": h["t1"], "text": h["text"]}
-                          for h in best_first if h.get("text")]
+        k_["captions"], seen = [], set()
+        for h in best_first:
+            # Neighbouring segments often share a caption word for word.
+            if h.get("text") and h["text"] not in seen:
+                seen.add(h["text"])
+                k_["captions"].append({"t0": h["t0"], "t1": h["t1"], "text": h["text"]})
     return kept
 
 

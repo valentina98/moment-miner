@@ -85,6 +85,10 @@ class SegmentStore:
         )
         if where:
             q = q.where(where)
+        # No select(): naming the columns makes lance warn that the rankings'
+        # own score columns were left out, and `text_score` reads one of them.
+        # return_score="all" keeps `_score` on a row both rankings found only
+        # from lancedb 0.41 (lancedb#4677), hence the pin in pyproject.toml.
         return [dict({c: r[c] for c in COLUMNS}, score=r["_relevance_score"],
                      text_score=r["_score"] or 0.0)
                 for r in q.to_list()]

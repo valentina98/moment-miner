@@ -145,3 +145,14 @@ def test_segments_with_no_motion_value_drop_out_of_a_filtered_search(tmp_path):
     assert search(q, be, store, k=5, static=True) == []
     assert [h["id"] for h in search(q, be, store, k=5, static=False)] == ["v1:1"]
     assert search(q, be, store, k=5)[0]["id"] == "v1:0"
+
+
+def test_a_caption_two_merged_segments_share_is_listed_once():
+    hits = [
+        {"id": str(i), "video_id": "v", "t0": t0, "t1": t0 + 8, "score": 1 - i / 10,
+         "text": text, "text_score": 1.0}
+        for i, (t0, text) in enumerate([(0.0, "kong vault"), (4.0, "kong vault"),
+                                        (8.0, "landing")])
+    ]
+    (hit,) = merge_overlapping(hits)
+    assert [c["text"] for c in hit["captions"]] == ["kong vault", "landing"]

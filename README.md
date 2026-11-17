@@ -40,7 +40,7 @@ $ mm cut ~/.mm_data/cuts/athlete-performs-a-kong-vault_<timestamp>/video_001-ath
 |---|---|
 | `mm index FOLDER` | scan recursively, index new, changed and previously failed videos under FOLDER and any whose segment geometry changed, drop videos no longer on disk; other folders are only reported, never touched; prints an ETA first and a progress bar over segments while it runs; never captions (`--reindex`, `--no-asr`, `--backend`, `--no-estimate`) |
 | `mm calibrate VIDEO` | measure this machine's index speed on the first 24 s of VIDEO, for the ETA; `mm index` runs it by itself the first time. On a 4K 50 fps CPU box it reads 8–15% above the full-run rate, so the ETA errs long |
-| `mm search QUERY` | ranked timestamps, each widened by `--pad`, with the caption of every segment a hit merged, best text match first, and one LosslessCut project per video; cuts nothing (`-k`, `-o`, `--pad`, `--json`, `--static`/`--moving`, `--static-max`) |
+| `mm search QUERY` | ranked timestamps, each widened by `--pad`, with the searchable text (caption, and speech when transcribed) of every segment a hit merged, best text match first, and one LosslessCut project per video; cuts nothing (`-k`, `-o`, `--pad`, `--json`, `--static`/`--moving`, `--static-max`) |
 | `mm cut PROJECT.llc…` | every segment of each project as a lossless clip, exactly as the project says, from `mm search` or saved in LosslessCut; a failed or taken clip does not stop the rest (`-o`, `--no-smart`, `--re-encode` with `--size`, `--codec`, `--crf`, `--fps`, `--no-audio`) |
 | `mm locate -q Q -v VIDEO` | where inside one video the action is (`--labels`/`--videos` to sweep a CSV, `--fps`, `--locator`, `--duration`, `-k`, `-o`) |
 | `mm annotate FOLDER` | interactive ground-truth labeling (`--template`) |
@@ -264,7 +264,7 @@ Each `mm search` CLI call reloads the models (~20 s on CPU). `mm serve` loads th
 
 ```bash
 mm serve --port 7700          # or containerized: make serve
-curl "localhost:7700/search?q=kong+vault&k=5"
+curl "localhost:7700/search?q=kong+vault&k=5"   # results: path, t0, t1, score, captions [{t0, t1, text}], best text match first
 curl localhost:7700/health    # backend, device, segment count
 ```
 
