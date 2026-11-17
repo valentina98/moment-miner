@@ -49,7 +49,7 @@ Three things are left out on purpose. **Outcome** — clean landing, bail, slip 
 
 **What the index already measures exactly does not belong in a label.** Static-vs-moving, frame rate, duration and date are numbers, held in each segment's `motion` value and the probe metadata; a caption guessing "static shot" duplicates a measurement and spends words doing it. Those are filters — the label is for what only a reader of the frames can say.
 
-**To re-evaluate the axes:** write down the queries the new task actually types, before looking at any caption; name the axis each one searches on, since an axis no caption names is a search that cannot work however good the ranker is; then change `PROMPT` and re-caption into a separate `--caption-set`, so the old set survives as a reference to compare against. Each axis costs two to four words, and a longer label dilutes every term in it. Caption sets written by different prompts are different instruments — re-run a comparison rather than reading across.
+**To re-evaluate the axes:** write down the queries the new task actually types, before looking at any caption; name the axis each one searches on, since an axis no caption names is a search that cannot work however good the ranker is; then edit the prompt template and re-caption into a separate `--caption-set`, so the old set survives as a reference to compare against. Each axis costs two to four words, and a longer label dilutes every term in it. Caption sets written by different prompts are different instruments — re-run a comparison rather than reading across.
 
 ## Credentials
 
