@@ -52,7 +52,7 @@ CLAUDE_CREDS ?= $(HOME)/.claude/.credentials.json
 TOKEN_COPY = python3 -c 'import json, os, sys; p = sys.argv[1]; e = (json.load(open(p)) if os.path.exists(p) else {}).get("claudeAiOauth") or {}; t = e.get("accessToken"); json.dump({"claudeAiOauth": {"accessToken": t}} if isinstance(t, str) and t else {}, sys.stdout)' "$(CLAUDE_CREDS)"
 TOKEN_FILE = tok=$$(mktemp) && new=$$(mktemp) && trap 'kill $$ref 2>/dev/null; rm -f "$$tok" "$$new"' EXIT && trap 'exit 130' INT TERM && \
 	$(TOKEN_COPY) > "$$tok" && \
-	{ while sleep 5 && kill -0 $$$$ 2>/dev/null; do $(TOKEN_COPY) > "$$new" && { cmp -s "$$new" "$$tok" || cat "$$new" > "$$tok"; }; done & ref=$$!; } &&
+	{ while sleep 5 && kill -0 $$$$ 2>/dev/null; do $(TOKEN_COPY) > "$$new" && { cmp -s "$$new" "$$tok" || cat "$$new" > "$$tok"; }; done </dev/null >/dev/null 2>&1 & ref=$$!; } &&
 TOKEN_MOUNT = -v "$$tok":/tmp/.claude/.credentials.json:ro
 
 # For targets that call no hosted model, so they never hold a key. Runs as you,

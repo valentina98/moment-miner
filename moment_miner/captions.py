@@ -388,7 +388,7 @@ class ClaudeCaptionBackend(CaptionBackend):
                 if self._credentials() != self._built_with:
                     return
             except (ValueError, MissingCaptionCredentials):
-                pass  # the file read mid-rewrite
+                pass  # a half-written file, or a copy with no token yet
             if time.monotonic() >= deadline:
                 return
             time.sleep(min(1.0, TOKEN_REFRESH_WAIT_S))
@@ -397,13 +397,13 @@ class ClaudeCaptionBackend(CaptionBackend):
         self.client
 
     def _create(self, messages: list):
+        import anthropic
+
         for attempt in (1, 2):
             try:
                 return self.client.messages.create(
                     model=self.model, max_tokens=self.max_tokens, messages=messages)
-            except Exception as e:
-                if getattr(e, "status_code", None) != 401:
-                    raise
+            except anthropic.AuthenticationError as e:
                 if attempt == 2:
                     raise MissingCaptionCredentials(
                         f"the API refused the captioning credentials twice, read "
