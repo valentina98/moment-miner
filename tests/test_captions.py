@@ -429,6 +429,80 @@ def test_a_caption_request_that_never_answers_fails_its_video_not_the_pass(
     assert held, "the request never reached the server"
 
 
+def _messages_api(cred_file, accept, refresh_to):
+    """A local Messages API that refuses every token but `accept` and, on each
+    refusal, writes `refresh_to` into the credential file the way Claude Code
+    writes a refreshed token as it revokes the old one."""
+    import http.server
+    import threading
+
+    seen = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers["Content-Length"]))
+            token = self.headers["Authorization"].removeprefix("Bearer ")
+            seen.append(token)
+            if token == accept:
+                code, body = 200, {
+                    "id": "msg_1", "type": "message", "role": "assistant",
+                    "model": "claude-haiku-4-5", "stop_reason": "end_turn",
+                    "stop_sequence": None, "usage": {"input_tokens": 1, "output_tokens": 1},
+                    "content": [{"type": "text", "text": "kong vault over a rail, a man, plaza, sunny"}]}
+            else:
+                cred_file.write_text(json.dumps({"claudeAiOauth": {"accessToken": refresh_to}}))
+                code, body = 401, {"type": "error", "error": {
+                    "type": "authentication_error",
+                    "message": "OAuth access token has been revoked"}}
+            data = json.dumps(body).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, seen
+
+
+def test_a_refreshed_token_is_read_again_and_the_request_retried(tmp_path, monkeypatch):
+    cred = tmp_path / ".credentials.json"
+    cred.write_text(json.dumps(CLAUDE_CREDS))
+    server, seen = _messages_api(cred, accept="new-token", refresh_to="new-token")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", f"http://127.0.0.1:{server.server_address[1]}")
+    be = ClaudeCaptionBackend("claude-haiku-4-5", env={"CLAUDE_CONFIG_DIR": str(tmp_path)})
+    try:
+        out = be.caption(frames(8), span=8.0)
+    finally:
+        server.shutdown()
+    assert out["action"] == "kong vault over a rail"
+    assert seen == ["oauth-value", "new-token"]
+
+
+@requires_ffmpeg
+def test_a_token_refused_twice_stops_the_caption_run(tmp_path, synthetic_video, monkeypatch):
+    from moment_miner.indexer import caption_indexed
+
+    manifest, store = _indexed(tmp_path, synthetic_video)
+    cred = tmp_path / ".credentials.json"
+    cred.write_text(json.dumps(CLAUDE_CREDS))
+    server, seen = _messages_api(cred, accept=None, refresh_to="oauth-value")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", f"http://127.0.0.1:{server.server_address[1]}")
+    be = ClaudeCaptionBackend("claude-haiku-4-5", env={"CLAUDE_CONFIG_DIR": str(tmp_path)})
+    try:
+        with pytest.raises(MissingCaptionCredentials, match="rerun `mm caption`"):
+            caption_indexed(manifest, store, be, synthetic_video.parent, frame_w=200,
+                            frame_h=120, data_dir=tmp_path / "data", log=lambda *a: None)
+    finally:
+        server.shutdown()
+    # Two segments: the first one's request and its one retry, then the run stops.
+    assert seen == ["oauth-value", "oauth-value"]
+
+
 @requires_ffmpeg
 def test_caption_pass_decodes_at_its_own_raster(tmp_path, synthetic_video):
     from moment_miner.frames import FRAME_H, FRAME_W

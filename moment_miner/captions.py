@@ -150,7 +150,7 @@ def load_prompt(name_or_path: str = DEFAULT_PROMPT) -> str:
 
 
 class MissingCaptionCredentials(RuntimeError):
-    """Neither credential route is available."""
+    """No usable credentials: neither route is available, or the API refused them."""
 
 
 class CaptionBackend(ABC):
@@ -374,6 +374,25 @@ class ClaudeCaptionBackend(CaptionBackend):
     def preflight(self) -> None:
         self.client
 
+    def _create(self, messages: list):
+        for attempt in (1, 2):
+            try:
+                return self.client.messages.create(
+                    model=self.model, max_tokens=self.max_tokens, messages=messages)
+            except Exception as e:
+                if getattr(e, "status_code", None) != 401:
+                    raise
+                if attempt == 2:
+                    raise MissingCaptionCredentials(
+                        f"the API refused the captioning credentials twice, read "
+                        f"again in between ({e}). Sign in to Claude Code again (or "
+                        "fix ANTHROPIC_API_KEY on the paid route) and rerun `mm "
+                        "caption`; the captions bought so far are kept."
+                    ) from e
+                # Claude Code refreshes its subscription token during a long run
+                # and revokes the old one, so the credentials are read again.
+                self._client = None
+
     def caption(self, frames: np.ndarray, span: float,
                 n_frames: int | None = None, stride: float = 4.0) -> str:
         picked = subsample(frames, span, stride, n_frames)
@@ -384,11 +403,7 @@ class ClaudeCaptionBackend(CaptionBackend):
         ]
         content.append({"type": "text",
                         "text": self.prompt.format(n=len(picked), span=span)})
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            messages=[{"role": "user", "content": content}],
-        )
+        response = self._create([{"role": "user", "content": content}])
         text = " ".join(
             b.text.strip() for b in response.content if b.type == "text"
         ).strip()
