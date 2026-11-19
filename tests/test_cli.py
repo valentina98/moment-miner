@@ -84,6 +84,24 @@ def _mm(data_dir, *args):
     return CliRunner().invoke(main, ["--data-dir", str(data_dir), *args])
 
 
+def test_index_of_a_folder_with_no_videos_fails_naming_it(tmp_path):
+    empty = tmp_path / "unmounted"
+    empty.mkdir()
+    result = _mm(tmp_path / "mm_data", "index", str(empty), "--backend", "mock", "--no-asr")
+    assert result.exit_code == 1
+    assert f"no videos found under {empty}" in result.output
+
+
+def test_index_of_a_folder_whose_videos_all_match_skip_does_not_fail(tmp_path):
+    folder = tmp_path / "exports"
+    folder.mkdir()
+    (folder / "a-merged-1760000000000.mp4").write_bytes(b"x" * 64)
+    result = _mm(tmp_path / "mm_data", "index", str(folder), "--backend", "mock", "--no-asr",
+                 "--skip", "*-merged-*")
+    assert result.exit_code == 0, result.output
+    assert "skipped: 1 video(s) matching --skip" in result.output
+
+
 def _indexed(tmp_path, synthetic_video):
     data_dir = tmp_path / "mm_data"
     result = _mm(data_dir, "index", str(synthetic_video.parent), "--backend", "mock",
@@ -231,7 +249,7 @@ def test_a_deleted_video_is_forgotten_and_the_rest_stay(tmp_path):
     m, folder = _two_indexed(tmp_path)
     (folder / "a.mp4").unlink()
     counts = m.scan(folder)
-    _forget_missing(m, counts, tmp_path / "data", "mock", folder)
+    _forget_missing(m, counts, tmp_path / "data", folder)
     assert counts["removed"] == 1
     assert [r["path"] for r in m.conn.execute("SELECT path FROM videos")] == [
         str((folder / "b.mp4").resolve())]
@@ -243,9 +261,99 @@ def test_every_video_missing_looks_like_a_new_mount_and_removes_nothing(tmp_path
     for p in folder.iterdir():
         p.unlink()
     counts = m.scan(folder)
-    _forget_missing(m, counts, tmp_path / "data", "mock", folder)
+    _forget_missing(m, counts, tmp_path / "data", folder)
     assert counts["removed"] == 0
     assert m.conn.execute("SELECT count(*) FROM videos").fetchone()[0] == 2
+
+
+@requires_ffmpeg
+def test_index_skip_removes_an_indexed_video_and_says_so(tmp_path, synthetic_video):
+    from moment_miner.store import SegmentStore
+    data_dir = tmp_path / "mm_data"
+
+    def index(*args):
+        return CliRunner().invoke(main, ["--data-dir", str(data_dir), "index",
+                                         str(synthetic_video.parent), "--backend", "mock",
+                                         "--no-asr", "--no-estimate", *args])
+
+    assert index().exit_code == 0
+    assert SegmentStore(data_dir, "mock").count() > 0
+    r = index("--skip", synthetic_video.name)
+    assert r.exit_code == 0, r.output
+    assert "test_video.mp4 (matches --skip)" in r.output
+    assert "skipped: 1 video(s) matching --skip" in r.output
+    assert SegmentStore(data_dir, "mock").count() == 0
+
+
+def _segments_for_two_models(data_dir, m):
+    """A row per indexed video in two models' tables, as two backends leave them."""
+    from moment_miner.store import SegmentStore
+    for backend, dim in (("mock", 4), ("other", 8)):
+        SegmentStore(data_dir, backend).add([
+            {"id": f"{row['id']}:0.0", "video_id": row["id"], "path": row["path"],
+             "t0": 0.0, "t1": 8.0, "text": "", "vector": [1.0] + [0.0] * (dim - 1),
+             "motion": 0.0}
+            for row in m.conn.execute("SELECT id, path FROM videos")])
+
+
+def _paths_in(data_dir, backend):
+    from moment_miner.store import SegmentStore
+    return sorted(r["path"] for r in SegmentStore(data_dir, backend).segments())
+
+
+def test_a_deleted_video_leaves_every_models_table(tmp_path):
+    from moment_miner.cli import _forget_missing
+    m, folder = _two_indexed(tmp_path)
+    _segments_for_two_models(tmp_path / "data", m)
+    (folder / "a.mp4").unlink()
+    _forget_missing(m, m.scan(folder), tmp_path / "data", folder)
+    kept = [str((folder / "b.mp4").resolve())]
+    assert _paths_in(tmp_path / "data", "mock") == kept
+    assert _paths_in(tmp_path / "data", "other") == kept
+
+
+def test_a_skipped_video_leaves_every_models_table(tmp_path):
+    from moment_miner.cli import _forget
+    m, folder = _two_indexed(tmp_path)
+    _segments_for_two_models(tmp_path / "data", m)
+    _forget(m, [str((folder / "a.mp4").resolve())], tmp_path / "data", "matches --skip")
+    kept = [str((folder / "b.mp4").resolve())]
+    assert _paths_in(tmp_path / "data", "mock") == kept
+    assert _paths_in(tmp_path / "data", "other") == kept
+
+
+def test_prune_asks_and_removes_what_index_keeps(tmp_path):
+    m, folder = _two_indexed(tmp_path)
+    data_dir = tmp_path / "data"
+    _segments_for_two_models(data_dir, m)
+    for p in folder.iterdir():
+        p.unlink()
+    no = CliRunner().invoke(main, ["--data-dir", str(data_dir), "prune"], input="n\n")
+    assert no.exit_code == 1 and "every indexed video is missing" in no.output
+    assert len(_paths_in(data_dir, "other")) == 2
+    yes = CliRunner().invoke(main, ["--data-dir", str(data_dir), "prune"], input="y\n")
+    assert yes.exit_code == 0, yes.output
+    assert "removed: 2 video(s)" in yes.output
+    assert _paths_in(data_dir, "mock") == _paths_in(data_dir, "other") == []
+    assert m.conn.execute("SELECT count(*) FROM videos").fetchone()[0] == 0
+
+
+def test_prune_keeps_what_is_on_disk_and_stays_inside_its_folder(tmp_path):
+    m, folder = _two_indexed(tmp_path)
+    data_dir = tmp_path / "data"
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    (other / "c.mp4").write_bytes(b"z" * 64)
+    m.scan(other)
+    _segments_for_two_models(data_dir, m)
+    (folder / "a.mp4").unlink()
+    (other / "c.mp4").unlink()
+    result = CliRunner().invoke(main, ["--data-dir", str(data_dir), "prune", str(folder), "--yes"])
+    assert result.exit_code == 0, result.output
+    assert _paths_in(data_dir, "other") == sorted(
+        [str((folder / "b.mp4").resolve()), str((other / "c.mp4").resolve())])
+    again = CliRunner().invoke(main, ["--data-dir", str(data_dir), "prune", str(folder)])
+    assert "nothing to prune" in again.output
 
 
 @requires_ffmpeg
@@ -264,3 +372,27 @@ def test_eval_scores_the_labels_in_the_data_folder_and_names_the_file(tmp_path, 
     assert result.exit_code == 0, result.output
     assert f"labels: {data_dir / 'labels.csv'}" in result.output
     assert "(1 labels)" in result.output
+
+
+def test_term_and_hup_unwind_like_ctrl_c(tmp_path):
+    import signal
+
+    CliRunner().invoke(main, ["--data-dir", str(tmp_path), "status"])
+    assert signal.getsignal(signal.SIGTERM) is signal.default_int_handler
+    assert signal.getsignal(signal.SIGHUP) is signal.default_int_handler
+
+
+def test_a_caption_prompt_or_model_the_backend_refuses_is_one_error_line(tmp_path):
+    cases = ((["--model", "claude-haiku-4-5", "--caption-prompt", "nope"],
+              "unknown caption prompt: 'nope'"),
+             (["--model", "claude-haiku-4-5", "--caption-prompt", str(tmp_path)], "directory"),
+             (["--model", "nope"], "unknown caption backend: 'nope'"))
+    (tmp_path / "x.d").mkdir()
+    for args, said in cases:
+        args = [str(tmp_path / "x.d") if a == str(tmp_path) else a for a in args]
+        result = CliRunner().invoke(main, [
+            "--data-dir", str(tmp_path / "data"), "caption", str(tmp_path), *args])
+        assert result.exit_code == 2 and isinstance(result.exception, SystemExit), args
+        assert "Error: Invalid value for --model / --caption-prompt: " in result.output
+        assert said in result.output and "Traceback" not in result.output, args
+    assert not (tmp_path / "data").exists()

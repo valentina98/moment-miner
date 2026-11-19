@@ -32,11 +32,16 @@ ARGS     ?=
 HOST_PATHS = -e MM_HOST_PATHS="/videos=$(abspath $(VIDEOS))$(if $(OUT),;/out=$(abspath $(OUT)),)$(if $(filter /%,$(DATA)),;/data=$(DATA),)"
 OUT_OPT = $(if $(OUT),-o $(abspath $(OUT)),)
 LABELS_OPT = $(if $(LABELS),--labels $(abspath $(LABELS)),)
-TEMPLATE ?= parkour
 PORT     ?= 7700
-CAPTION_MODEL ?= claude-haiku-4-5
+# Left empty, these leave the option to PROFILE or to the command's own default.
+TEMPLATE ?=
+CAPTION_MODEL ?=
 # Caption prompt: a shipped name (general, parkour) or a file path.
-CAPTION_PROMPT ?= general
+CAPTION_PROMPT ?=
+# A profile (shipped: parkour), or your own in DATA/profiles/<name>.yaml: every
+# target passes it, and it sets the defaults of that command's options.
+PROFILE  ?=
+PROFILE_OPT = $(if $(PROFILE),--profile $(PROFILE),)
 GPUS     ?=
 
 # The subscription token reaches only `caption`, and never as
@@ -59,8 +64,11 @@ TOKEN_MOUNT = -v "$$tok":/tmp/.claude/.credentials.json:ro
 # so what lands in DATA and OUT is yours rather than root's; that user has no
 # home in the image, hence HOME=/tmp and the cache at /cache. A host folder is
 # created first, or docker would create it owned by root.
+# --init: the container's PID 1 gets only the signals it handles, so an init
+# takes that place and passes TERM and HUP on, whatever the image runs; a
+# closed terminal then ends the run.
 RUN_NO_KEYS = $(if $(filter /%,$(DATA) $(CACHE) $(abspath $(OUT))),mkdir -p $(filter /%,$(DATA) $(CACHE) $(abspath $(OUT))) &&,) \
-	docker run --rm $(GPUS) \
+	docker run --rm --init $(GPUS) \
 	--user $(shell id -u):$(shell id -g) -e HOME=/tmp -e XDG_CACHE_HOME=/cache \
 	$(HOST_PATHS) \
 	-v $(abspath $(VIDEOS)):/videos:ro \
@@ -74,7 +82,7 @@ RUN = $(RUN_NO_KEYS) \
 	-e ANTHROPIC_API_KEY \
 	-e TYPESAFE_API_KEY
 
-.PHONY: image dev-image test calibrate index caption search cut annotate eval status probe serve shell
+.PHONY: image dev-image test calibrate index caption search cut annotate eval status prune probe serve shell
 
 image:
 	docker build --target runtime -t $(IMAGE) .
@@ -83,44 +91,49 @@ dev-image:
 	docker build -t $(IMAGE):dev .
 
 test: dev-image
-	docker run --rm $(IMAGE):dev
+	docker run --rm --init $(IMAGE):dev
 
 # Each target runs the mm command of the same name; ARGS adds options to any of them.
 # Measures this machine once on 24 s of SUB (a video), so `index` can print an ETA; index runs it itself when missing.
 calibrate: image
-	$(RUN_NO_KEYS) $(IMAGE) calibrate /videos/$(SUB) $(ARGS)
+	$(RUN_NO_KEYS) $(IMAGE) calibrate /videos/$(SUB) $(PROFILE_OPT) $(ARGS)
 
 index: image
-	$(RUN_NO_KEYS) $(IMAGE) index /videos/$(SUB) $(ARGS)
+	$(RUN_NO_KEYS) $(IMAGE) index /videos/$(SUB) $(PROFILE_OPT) $(ARGS)
 
 # Captions an index that already exists; the only target that can spend.
 caption: image
-	$(TOKEN_FILE) $(RUN) $(TOKEN_MOUNT) $(IMAGE) caption /videos/$(SUB) --model $(CAPTION_MODEL) --caption-prompt $(CAPTION_PROMPT) $(ARGS)
+	$(TOKEN_FILE) $(RUN) $(TOKEN_MOUNT) $(IMAGE) caption /videos/$(SUB) $(if $(CAPTION_MODEL),--model $(CAPTION_MODEL),) $(if $(CAPTION_PROMPT),--caption-prompt $(CAPTION_PROMPT),) $(PROFILE_OPT) $(ARGS)
 
 search: image
-	$(RUN_NO_KEYS) $(IMAGE) search "$(Q)" -k $(K) $(OUT_OPT) $(ARGS)
+	$(RUN_NO_KEYS) $(IMAGE) search "$(Q)" -k $(K) $(OUT_OPT) $(PROFILE_OPT) $(ARGS)
 
 cut: image
 	@test -n "$(PROJECT)" || { echo "name the project: make cut PROJECT=<path to a .llc file>"; exit 1; }
-	$(RUN_NO_KEYS) $(IMAGE) cut "$(abspath $(PROJECT))" $(OUT_OPT) $(ARGS)
+	$(RUN_NO_KEYS) $(IMAGE) cut "$(abspath $(PROJECT))" $(OUT_OPT) $(PROFILE_OPT) $(ARGS)
 
 # Interactive.
 annotate: image
-	$(RUN_NO_KEYS) -it $(IMAGE) annotate /videos/$(SUB) --template $(TEMPLATE) $(LABELS_OPT) $(ARGS)
+	$(RUN_NO_KEYS) -it $(IMAGE) annotate /videos/$(SUB) $(if $(TEMPLATE),--template $(TEMPLATE),) $(LABELS_OPT) $(PROFILE_OPT) $(ARGS)
 
 eval: image
-	$(RUN_NO_KEYS) $(IMAGE) eval $(LABELS_OPT) $(ARGS)
+	$(RUN_NO_KEYS) $(IMAGE) eval $(LABELS_OPT) $(PROFILE_OPT) $(ARGS)
 
 status: image
-	$(RUN_NO_KEYS) $(IMAGE) status $(ARGS)
+	$(RUN_NO_KEYS) $(IMAGE) status $(PROFILE_OPT) $(ARGS)
+
+# Asks before removing (-i for the answer); ARGS=--yes removes without asking. VIDEOS
+# must be the folder the index was built from, or every video looks missing.
+prune: image
+	$(RUN_NO_KEYS) -i $(IMAGE) prune $(ARGS)
 
 # Keys only for the hosted ranker.
 probe: image
 	@test -f "$(PROMPTS)" || { echo "no prompts file at $(PROMPTS) -- write one, or pass PROMPTS=<path>"; exit 1; }
-	$(if $(filter jev,$(RANKER)),$(RUN),$(RUN_NO_KEYS)) -v "$(abspath $(PROMPTS))":/prompts.txt:ro $(IMAGE) probe /prompts.txt --axis $(AXIS) --ranker $(RANKER) -k $(K) $(ARGS)
+	$(if $(filter jev,$(RANKER)),$(RUN),$(RUN_NO_KEYS)) -v "$(abspath $(PROMPTS))":/prompts.txt:ro $(IMAGE) probe /prompts.txt --axis $(AXIS) --ranker $(RANKER) -k $(K) $(PROFILE_OPT) $(ARGS)
 
 serve: image
-	$(RUN_NO_KEYS) -p $(PORT):$(PORT) $(IMAGE) serve --host 0.0.0.0 --port $(PORT) $(ARGS)
+	$(RUN_NO_KEYS) -p $(PORT):$(PORT) $(IMAGE) serve --host 0.0.0.0 --port $(PORT) $(PROFILE_OPT) $(ARGS)
 
 shell: dev-image
 	$(RUN) -it --entrypoint bash $(IMAGE):dev

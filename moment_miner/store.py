@@ -12,6 +12,36 @@ from .guard import writable
 COLUMNS = ["id", "video_id", "path", "t0", "t1", "text"]
 
 
+class _InSegmentOrder(RRFReranker):
+    """Reciprocal-rank fusion of the `k` best of each ranking, in which rows
+    with equal scores rank by video, then by start time.
+
+    Segments of one scene often share a caption word for word, so their BM25
+    scores are equal, and the order lance returns equal scores in follows how
+    the rows are stored: the ranking would change with a re-index of unchanged
+    footage. Lance cuts each ranking to the query's limit before it reaches a
+    reranker, so the query asks for more than `k` and the cut to `k` is made
+    here, after the ordering, where it cannot split a tied group by storage.
+    """
+
+    # shortcut: a group of tied rows that reaches past OVERFETCH * k is still
+    # cut by storage order; raise it if such a group shows up (dozens of
+    # segments sharing one caption were the most seen, at k = 50).
+    OVERFETCH = 4
+    TIES = [("video_id", "ascending"), ("t0", "ascending")]
+
+    def __init__(self, k: int, **kwargs):
+        super().__init__(**kwargs)
+        self.k = k
+
+    def rerank_hybrid(self, query, vector_results, fts_results):
+        fused = super().rerank_hybrid(
+            query,
+            vector_results.sort_by([("_distance", "ascending"), *self.TIES]).slice(0, self.k),
+            fts_results.sort_by([("_score", "descending"), *self.TIES]).slice(0, self.k))
+        return fused.sort_by([("_relevance_score", "descending"), *self.TIES]).slice(0, self.k)
+
+
 class SegmentStore:
     """One LanceDB table per embedding backend (dimensions differ)."""
 
@@ -21,6 +51,13 @@ class SegmentStore:
 
     def _names(self) -> list[str]:
         return list(self.db.list_tables().tables)
+
+    @staticmethod
+    def backends(data_dir: str | Path) -> list[str]:
+        """Every backend with a table here, so a removal reaches each model's rows."""
+        db = lancedb.connect(str(writable(Path(data_dir) / "lance")))
+        return [n[len("segments_"):] for n in db.list_tables().tables
+                if n.startswith("segments_")]
 
     @property
     def table(self):
@@ -70,8 +107,9 @@ class SegmentStore:
     def search(self, vec: np.ndarray, query: str, k: int = 50,
                where: str | None = None) -> list[dict]:
         """The `k` best of the vector and full-text rankings fused by
-        reciprocal rank (K=60), as `score`. `where` filters both rankings
-        before they are cut to `k`."""
+        reciprocal rank (K=60), as `score`, with each row's own BM25 score as
+        `text_score` (0 when only the vector ranking found it). `where`
+        filters both rankings before they are cut to `k`."""
         q = (
             self.table.search(query_type="hybrid")
             .vector(np.asarray(vec, dtype=np.float32))
@@ -79,15 +117,29 @@ class SegmentStore:
             # phrase fails for want of token positions, and it needs a
             # full-text index; this scans rows no index covers yet.
             .text(MatchQuery(query, "text"))
-            .rerank(RRFReranker())
-            .limit(k)
+            .rerank(_InSegmentOrder(k, return_score="all"))
+            .limit(k * _InSegmentOrder.OVERFETCH)
         )
         if where:
             q = q.where(where)
-        # No select(): naming the columns makes lance warn on every query that
-        # the rankings' own score columns were left out.
-        return [dict({c: r[c] for c in COLUMNS}, score=r["_relevance_score"])
-                for r in q.to_list()]
+        # No select(): naming the columns makes lance warn that the rankings'
+        # own score columns were left out, and `text_score` reads one of them.
+        # return_score="all" keeps `_score` on a row both rankings found only
+        # from lancedb 0.41 (lancedb#4677), hence the pin in pyproject.toml.
+        rows = q.to_list()
+        # The text ranking scores only its own top `k`, so a row the vector
+        # ranking alone brought in is scored here, by the same full-text query.
+        unscored = [r["id"] for r in rows if r["_score"] is None]
+        own = {}
+        if unscored:
+            quoted = ", ".join("'{}'".format(i.replace("'", "''")) for i in unscored)
+            own = {r["id"]: r["_score"] for r in
+                   self.table.search(MatchQuery(query, "text"), query_type="fts")
+                   .where(f"id IN ({quoted})", prefilter=True)
+                   .limit(len(unscored)).to_list()}
+        return [dict({c: r[c] for c in COLUMNS}, score=r["_relevance_score"],
+                     text_score=r["_score"] or own.get(r["id"], 0.0))
+                for r in rows]
 
     def count(self) -> int:
         if self.table_name not in self._names():

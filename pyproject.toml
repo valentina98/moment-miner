@@ -11,8 +11,11 @@ dependencies = [
     "click>=8.1",
     # LosslessCut saves its projects as JSON5.
     "json5>=0.9",
-    "lancedb>=0.15",
+    "lancedb>=0.41",
     "numpy>=1.26",
+    # --skip patterns, matched the way .gitignore matches them.
+    "pathspec>=1.1",
+    "pyyaml>=6.0",
     "tqdm>=4.60",
 ]
 
@@ -35,7 +38,7 @@ mm = "moment_miner.cli:main"
 include = ["moment_miner*"]
 
 [tool.setuptools.package-data]
-moment_miner = ["templates/*.csv", "templates/*.html", "templates/*.txt"]
+moment_miner = ["templates/*.csv", "templates/*.html", "templates/*.txt", "templates/*.yaml"]
 
 # Pyright resolves imports from this venv (types only — dev still runs in Docker).
 # Needed because the dir is `venv/`, not the `.venv/` Pyright auto-detects.

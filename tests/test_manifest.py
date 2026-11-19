@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 from moment_miner.manifest import Manifest, fingerprint
 
@@ -32,8 +33,8 @@ def test_scan_new_unchanged_changed(tmp_path):
     (archive / "notes.txt").write_text("not a video")
 
     m = Manifest(tmp_path / "mm.db")
-    assert m.scan(archive) == {"new": 2, "changed": 0, "unchanged": 0, "missing": []}
-    assert m.scan(archive) == {"new": 0, "changed": 0, "unchanged": 2, "missing": []}
+    assert m.scan(archive) == {"new": 2, "changed": 0, "unchanged": 0, "missing": [], "skipped": [], "excluded": []}
+    assert m.scan(archive) == {"new": 0, "changed": 0, "unchanged": 2, "missing": [], "skipped": [], "excluded": []}
 
     _fake_video(archive / "a.mp4", b"y" * 8192)
     os.utime(archive / "a.mp4", (1, 1))
@@ -58,7 +59,51 @@ def test_scan_skips_clips_the_tool_exported(tmp_path):
     _fake_video(archive / "01_real-00.00.01.000-00.00.03.000.mp4")
     m = Manifest(tmp_path / "mm.db")
     m.add_export(archive / "01_real-00.00.01.000-00.00.03.000.mp4")
-    assert m.scan(archive) == {"new": 1, "changed": 0, "unchanged": 0, "missing": []}
+    assert m.scan(archive) == {"new": 1, "changed": 0, "unchanged": 0, "missing": [], "skipped": [], "excluded": []}
+
+
+# The patterns the README gives for LosslessCut's exports.
+LLC_PATTERNS = ["*-??.??.??.*-??.??.??.*", "*-merged-[0-9]*"]
+
+
+def test_scan_skips_matching_videos_and_lists_them(tmp_path):
+    archive = tmp_path / "archive"
+    (archive / "edited").mkdir(parents=True)
+    (archive / "day2" / "edited").mkdir(parents=True)
+    for name in ("a.mp4", "b.mp4", "edited/a.mp4", "day2/c.mp4", "day2/edited/c.mp4"):
+        _fake_video(archive / name)
+    counts = Manifest(tmp_path / "mm.db").scan(archive, ["edited/", "b.mp4"])
+    assert counts["new"] == 2
+    assert [Path(p).relative_to(archive.resolve()).as_posix() for p in counts["skipped"]] == [
+        "b.mp4", "day2/edited/c.mp4", "edited/a.mp4"]
+
+
+def test_the_readme_patterns_skip_losslesscut_exports_and_nothing_else(tmp_path):
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    exports = ["2M4A8050-00.00.23.993-00.00.28.358-seg01.MP4",
+               "2M4A8050-00.01.08.609-00.01.10.946.MP4",
+               "2M4A8050-00.00.10.61-00.00.18.92-kong vault.MP4",
+               "2M4A8050-merged-1760000000000.MP4",
+               "2M4A8050-cut-merged-1760000000000.MP4"]
+    others = ["2M4A8050.MP4", "GX010123-2.MP4", "GX010123-final.MP4", "trip-2024-05-01.mp4"]
+    for name in exports + others:
+        _fake_video(archive / name)
+    counts = Manifest(tmp_path / "mm.db").scan(archive, LLC_PATTERNS)
+    assert counts["new"] == len(others)
+    assert sorted(Path(p).name for p in counts["skipped"]) == sorted(exports)
+
+
+def test_an_indexed_video_that_matches_later_is_excluded_not_missing(tmp_path):
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    _fake_video(archive / "a.mp4")
+    _fake_video(archive / "b.mp4", b"y" * 4096)
+    m = Manifest(tmp_path / "mm.db")
+    assert m.scan(archive)["new"] == 2
+    counts = m.scan(archive, ["b.mp4"])
+    assert counts["missing"] == []
+    assert counts["excluded"] == [str((archive / "b.mp4").resolve())]
 
 
 def test_scan_knows_an_export_written_through_another_mount(tmp_path, monkeypatch):

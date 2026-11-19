@@ -2,6 +2,7 @@ import csv
 from collections import Counter
 import json as jsonlib
 import re
+import signal
 import time
 from importlib.resources import files as pkg_files
 from pathlib import Path
@@ -27,6 +28,11 @@ from .timefmt import fmt_ts, parse_ts
 @click.pass_context
 def main(ctx, data_dir):
     """Moment Miner: search large video archives, cut lossless clips."""
+    # A `kill` or a closed terminal unwinds like Ctrl-C, so a stopped run
+    # still removes its partial clip and settles the captions it bought.
+    for name in ("SIGTERM", "SIGHUP"):
+        if hasattr(signal, name):
+            signal.signal(getattr(signal, name), signal.default_int_handler)
     ctx.obj = Path(data_dir).expanduser()
     guard.arm(ctx.obj)
     ctx.call_on_close(guard.disarm)
@@ -84,9 +90,16 @@ def help_cmd(ctx, command):
 @click.option("--estimate/--no-estimate", default=True, show_default=True,
               help="Print an ETA first. The first run on a machine measures its "
                    "speed once on 24 s of the first video (`mm calibrate`).")
+@click.option("--skip", multiple=True, metavar="PATTERN",
+              help="Leave out videos matching PATTERN, written as in .gitignore and "
+                   "matched against the path under FOLDER: `edited/`, `2M4A7515.MP4`, "
+                   "`*-merged-*`. Repeatable. A video already indexed that matches is "
+                   "removed from the index.")
 @click.pass_obj
-def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex, estimate):
+def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex, estimate, skip):
     """Scan FOLDER recursively and index new, changed and failed videos.
+
+    Skips the clips this tool exported, and videos matching --skip.
 
     Never captions and never spends: `mm caption` does that. A re-indexed
     segment keeps the captions it already had.
@@ -97,12 +110,25 @@ def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex, es
     from .indexer import index_pending, index_settings
 
     manifest = Manifest(data_dir / "manifest.db")
-    counts = manifest.scan(folder)
+    counts = manifest.scan(folder, skip)
+    # Docker Desktop binds an unmounted drive as an empty folder, so an empty
+    # scan with nothing indexed there before is a mistake, not a no-op. A video
+    # left out by --skip was still found.
+    if not any(counts[k] for k in ("new", "changed", "unchanged", "missing", "skipped", "excluded")):
+        raise click.ClickException(
+            f"no videos found under {on_host(folder)} -- is the drive mounted?")
     if reindex:
         manifest.reset(folder)
     be = get_backend(backend)
-    _forget_missing(manifest, counts, data_dir, be.name, folder)
+    _forget_missing(manifest, counts, data_dir, folder)
+    excluded = counts.pop("excluded")
+    _forget(manifest, excluded, data_dir, "matches --skip")
+    counts["removed"] += len(excluded)
+    skipped = counts["skipped"]
+    counts["skipped"] = len(skipped)
     click.echo(f"scan: {counts}")
+    for parent, n in sorted(Counter(str(Path(p).parent) for p in skipped).items()):
+        click.echo(f"skipped: {n} video(s) matching --skip in {on_host(parent)}")
     settings = index_settings(be.name, window, stride)
     _report_stale_elsewhere(manifest, settings, folder)
     pending = manifest.pending(settings, folder)
@@ -174,7 +200,7 @@ def calibrate(data_dir, video, backend):
     run(data_dir, get_backend(backend), video, log=click.echo)
 
 
-def _forget_missing(manifest, counts, data_dir, backend_name, folder):
+def _forget_missing(manifest, counts, data_dir, folder):
     """Drop videos whose file is gone, unless every one under FOLDER is gone.
 
     All of them missing at once is what a different mount root looks like,
@@ -187,17 +213,36 @@ def _forget_missing(manifest, counts, data_dir, backend_name, folder):
     known = counts["unchanged"] + counts["changed"] + len(missing)
     if len(missing) == known:
         click.echo(f"kept: all {len(missing)} indexed video(s) under {on_host(folder)} are "
-                   "missing -- a different mount root? Nothing removed.")
+                   "missing -- a different mount root? Nothing removed; `mm prune` "
+                   "removes them after asking.")
         return
-    stores = [SegmentStore(data_dir, backend_name), AxisStore(data_dir)]
-    for path in missing:
+    _forget(manifest, missing, data_dir, "file no longer on disk")
+    counts["removed"] = len(missing)
+
+
+def _forget(manifest, paths, data_dir, why):
+    """Drop videos during `mm index`, one line each saying why."""
+    if not paths:
+        return
+    _drop_videos(manifest, data_dir, paths)
+    for path in paths:
+        click.echo(f"removed: {on_host(path)} ({why})")
+
+
+def _drop_videos(manifest, data_dir, paths):
+    """Remove these videos' rows for every model, their axes and their manifest
+    entries. The caption cache keeps their captions, so a video that comes back
+    is not captioned twice."""
+    stores = [SegmentStore(data_dir, b) for b in SegmentStore.backends(data_dir)]
+    axes = AxisStore(data_dir)
+    for path in paths:
         for store in stores:
             store.delete_path(path)
+        axes.delete_path(path)
         manifest.forget(path)
-        click.echo(f"removed: {on_host(path)} (file no longer on disk)")
-    if stores[0].count():
-        stores[0].rebuild_fts()
-    counts["removed"] = len(missing)
+    for store in stores:
+        if store.count():
+            store.rebuild_fts()
 
 
 def _report_stale_elsewhere(manifest, settings, folder):
@@ -275,12 +320,17 @@ def caption(data_dir, folder, model, allow_paid, paid_budget_usd, backend, frame
     from .captions import get_caption_backend
     from .indexer import caption_indexed
 
+    try:
+        caption_backend = get_caption_backend(
+            model, allow_paid=allow_paid, prompt=caption_prompt,
+            paid_budget_usd=paid_budget_usd)
+    except (ValueError, OSError) as e:
+        # An unknown model or prompt, or a prompt file that cannot be read.
+        raise click.BadParameter(str(e), param_hint="--model / --caption-prompt") from e
     store = SegmentStore(data_dir, backend)
     try:
         result = caption_indexed(
-            Manifest(data_dir / "manifest.db"), store,
-            get_caption_backend(model, allow_paid=allow_paid, prompt=caption_prompt,
-                                paid_budget_usd=paid_budget_usd),
+            Manifest(data_dir / "manifest.db"), store, caption_backend,
             folder, frame_w=frame_size[0], frame_h=frame_size[1],
             axis_store=AxisStore(data_dir),
             data_dir=data_dir, caption_set=caption_set, caption_frames=caption_frames,
@@ -405,7 +455,7 @@ def search(data_dir, query, k, backend, as_json, output, pad, static, static_max
         h["t1"] = h["t1"] + pad if row is None else min(row["duration"], h["t1"] + pad)
     if as_json:
         click.echo(jsonlib.dumps(
-            [{**{k_: h[k_] for k_ in ("t0", "t1", "score", "text")}, "path": on_host(h["path"])}
+            [{**{k_: h[k_] for k_ in ("t0", "t1", "score", "captions")}, "path": on_host(h["path"])}
              for h in hits], indent=2))
     elif not hits:
         click.echo("no results")
@@ -413,8 +463,8 @@ def search(data_dir, query, k, backend, as_json, output, pad, static, static_max
         for h in hits:
             click.echo(f"{on_host(h['path'])}\n  {fmt_ts(h['t0'])} - {fmt_ts(h['t1'])}"
                        f"  (score {h['score']:.4f})")
-            if h.get("text"):
-                click.echo(f"  \"{h['text'][:120]}\"")
+            for c in h["captions"]:
+                click.echo(f"  {fmt_ts(c['t0'])} \"{c['text'][:120]}\"")
     if not hits:
         return
     if output:
@@ -660,6 +710,37 @@ def status(data_dir, show_errors):
             click.echo(f"  {on_host(row['path'])}: {row['error']}")
 
 
+@main.command()
+@click.argument("folder", required=False, type=UserPath(file_okay=False))
+@click.option("--yes", is_flag=True, help="Remove them without asking.")
+@click.pass_obj
+def prune(data_dir, folder, yes):
+    """Remove indexed videos whose file is gone, after asking.
+
+    For what `mm index` keeps on purpose: a folder whose videos are all
+    missing at once, which is also what an unplugged drive looks like, and
+    folders never indexed again. Their rows go for every model; their
+    captions stay in the cache. FOLDER limits it to the videos under it.
+    Indexes nothing and deletes no file.
+    """
+    manifest = Manifest(data_dir / "manifest.db")
+    known = manifest.paths(folder)
+    missing = [p for p in known if not Path(p).exists()]
+    if not missing:
+        click.echo(f"nothing to prune: all {len(known)} indexed video(s) are on disk")
+        return
+    for path in missing:
+        click.echo(f"missing: {on_host(path)}")
+    if len(missing) == len(known):
+        click.echo("every indexed video" + (f" under {on_host(folder)}" if folder else "")
+                   + " is missing: an unplugged drive or a different mount looks the same")
+    if not yes:
+        click.confirm(f"Remove these {len(missing)} of {len(known)} video(s) from the index?",
+                      abort=True)
+    _drop_videos(manifest, data_dir, missing)
+    click.echo(f"removed: {len(missing)} video(s); their captions stay in the cache")
+
+
 @main.command(
     epilog="Rankers: " + ", ".join(_ranker_names()))
 @click.argument("prompts", type=UserPath(exists=True, dir_okay=False))
@@ -807,6 +888,53 @@ def locate(query, video, labels, videos, fps, locator_name, duration, top_k, bac
             "__META__", jsonlib.dumps({"fps": fps, "locator": locator_name,
                                        "duration": duration, "backend": be.name})))
         click.echo(f"wrote {on_host(page)} ({len(panels)} panel(s))")
+
+
+def _profile(ctx, param, value):
+    """Make the profile's section for this command the defaults of its options.
+
+    Eager, so it runs before the other options are read: the profile's value
+    then fills any option the command line leaves out.
+    """
+    if value is None:
+        return None
+    from .profiles import load_profile
+
+    try:
+        sections = {name: _profile_section(name, keys)
+                    for name, keys in load_profile(value, ctx.obj).items()}
+    except ValueError as e:
+        raise click.BadParameter(str(e), ctx, param) from e
+    ctx.default_map = sections.get(ctx.info_name, {})
+    return value
+
+
+def _option_names(cmd) -> dict[str, str]:
+    """A command's long option names, as a profile writes them -> parameter names."""
+    return {max(p.opts, key=len).lstrip("-"): p.name for p in cmd.params
+            if isinstance(p, click.Option) and p.name != "profile"}
+
+
+def _profile_section(command: str, keys: dict) -> dict:
+    cmd = main.commands.get(command)
+    if cmd is None or command == "help":
+        raise ValueError(f"profile section {command!r} is not a command; sections are "
+                         + ", ".join(n for n in sorted(main.commands) if n != "help"))
+    names = _option_names(cmd)
+    unknown = sorted(set(keys) - set(names))
+    if unknown:
+        raise ValueError(f"profile section {command!r} has no option {', '.join(unknown)}; "
+                         f"its options are {', '.join(sorted(names))}")
+    return {names[k]: v for k, v in keys.items()}
+
+
+for _name, _cmd in main.commands.items():
+    if _name != "help":
+        _cmd.params.append(click.Option(
+            ["--profile"], is_eager=True, expose_value=False, callback=_profile,
+            help="Take this command's defaults from a profile: a name looked up "
+                 "in DATA_DIR/profiles/, then among the shipped ones, or a .yaml "
+                 "path. Options typed here still win."))
 
 
 if __name__ == "__main__":

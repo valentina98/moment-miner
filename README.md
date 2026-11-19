@@ -38,9 +38,9 @@ $ mm cut ~/.mm_data/cuts/athlete-performs-a-kong-vault_<timestamp>/video_001-ath
 
 | Command | Purpose |
 |---|---|
-| `mm index FOLDER` | scan recursively, index new, changed and previously failed videos under FOLDER and any whose segment geometry changed, drop videos no longer on disk; other folders are only reported, never touched; prints an ETA first and a progress bar over segments while it runs; never captions (`--reindex`, `--no-asr`, `--backend`, `--no-estimate`) |
+| `mm index FOLDER` | scan recursively, index new, changed and previously failed videos under FOLDER and any whose segment geometry changed, drop videos no longer on disk from every model's index (unless all of them are, which looks like an unplugged drive) and leave out those matching `--skip`; other folders are only reported, never touched; prints an ETA first and a progress bar over segments while it runs; never captions (`--skip`, `--reindex`, `--no-asr`, `--backend`, `--no-estimate`) |
 | `mm calibrate VIDEO` | measure this machine's index speed on the first 24 s of VIDEO, for the ETA; `mm index` runs it by itself the first time. On a 4K 50 fps CPU box it reads 8–15% above the full-run rate, so the ETA errs long |
-| `mm search QUERY` | ranked timestamps, each widened by `--pad`, and one LosslessCut project per video; cuts nothing (`-k`, `-o`, `--pad`, `--json`, `--static`/`--moving`, `--static-max`) |
+| `mm search QUERY` | ranked timestamps, each widened by `--pad`, with the searchable text (caption, and speech when transcribed) of every segment a hit merged, best text match first, and one LosslessCut project per video; cuts nothing (`-k`, `-o`, `--pad`, `--json`, `--static`/`--moving`, `--static-max`) |
 | `mm cut PROJECT.llc…` | every segment of each project as a lossless clip, exactly as the project says, from `mm search` or saved in LosslessCut; a failed or taken clip does not stop the rest (`-o`, `--no-smart`, `--re-encode` with `--size`, `--codec`, `--crf`, `--fps`, `--no-audio`) |
 | `mm locate -q Q -v VIDEO` | where inside one video the action is (`--labels`/`--videos` to sweep a CSV, `--fps`, `--locator`, `--duration`, `-k`, `-o`) |
 | `mm annotate FOLDER` | interactive ground-truth labeling (`--template`) |
@@ -50,9 +50,26 @@ $ mm cut ~/.mm_data/cuts/athlete-performs-a-kong-vault_<timestamp>/video_001-ath
 | `mm caption-export [SET]` | one caption set as `SET.csv`, for use outside the tool (`-o`) |
 | `mm serve` | resident HTTP search daemon (`/search`, `/health`) |
 | `mm status` | index statistics and the caption sets in the cache (`--errors` lists failed files) |
+| `mm prune [FOLDER]` | remove indexed videos whose file is gone, after asking, including a folder `mm index` keeps because every video in it is missing; every model's rows go, captions stay in the cache; indexes nothing, deletes no file (`--yes`) |
 | `mm help [COMMAND]` | this list / per-command help (also `--version`) |
 
 All commands take `--data-dir` (default `~/.mm_data`) before the subcommand.
+
+### Profiles
+
+A profile holds the defaults of each command's options for one kind of footage, so a parkour archive and a wedding archive need no retyped flags. Every command but `help` takes `--profile NAME`: it reads `<data-dir>/profiles/NAME.yaml`, or a shipped profile of that name (today `parkour`), or a `.yaml` path. An option typed on the command line still wins; without `--profile` the built-in defaults apply. One section per command, its keys the long option names `mm <command> --help` shows, without the dashes:
+
+```yaml
+index:
+  stride: 4.0
+caption:
+  model: claude-haiku-4-5
+  caption-prompt: parkour
+annotate:
+  template: parkour
+```
+
+A misspelt command or option stops the command and lists the valid names. In Docker, `make <target> PROFILE=parkour` passes it to any target; `CAPTION_MODEL`, `CAPTION_PROMPT` and `TEMPLATE` are passed only when set, so they never hide what the profile says. API keys never go into a profile.
 
 ### What it writes, and where
 
@@ -69,7 +86,7 @@ The tool never changes or replaces a footage file, and every `make` target mount
 | the `mm caption-compare` page and its key | `<data>/cuts/caption-compare_<timestamp>/` | `-o` |
 | the `mm locate` page | only with `-o` | — |
 
-Clip names follow LosslessCut's default, `<video>-<from>-<to><ext>` with the exact cut times, and a segment ranked by `mm search` gets its rank in front, so a folder sorts best match first (`02_2M4A8050-00.01.12.345-00.01.20.678.MP4`). An existing file is never replaced: a clip, `.llc` or page whose name is taken is skipped, and the run ends listing what it skipped, with exit code 1. `mm index` never indexes a clip the tool exported, wherever it sits. A clip is written as `.partial-<name>` and renamed when complete, so a stopped or failed cut leaves no truncated clip; a `.partial-` file that a crash left behind is never indexed and can be deleted. The data folder may sit on any drive, footage folders included. Deleting the index costs a re-index; deleting `captions.db` costs the captions again. Model weights are downloaded by their libraries into `~/.cache`, outside the tool's control.
+Clip names follow LosslessCut's default, `<video>-<from>-<to><ext>` with the exact cut times, and a segment ranked by `mm search` gets its rank in front, so a folder sorts best match first (`02_2M4A8050-00.01.12.345-00.01.20.678.MP4`). An existing file is never replaced: a clip, `.llc` or page whose name is taken is skipped, and the run ends listing what it skipped, with exit code 1. `mm index` never indexes a clip the tool exported, wherever it sits. Anything else is left out with `--skip PATTERN`, repeatable, written as in `.gitignore` and matched against the path under FOLDER: `edited/` for a folder of copies, `2M4A7515.MP4` for one clip, and `*-??.??.??.*-??.??.??.*` plus `*-merged-[0-9]*` for LosslessCut's exports in its default timecode format, which hold the same moments as their source and would return each moment twice. A video already indexed that matches is removed from the index; its captions stay cached. The run prints how many it skipped per folder. A clip is written as `.partial-<name>` and renamed when complete, so a stopped or failed cut leaves no truncated clip; a `.partial-` file that a crash left behind is never indexed and can be deleted. The data folder may sit on any drive, footage folders included. Deleting the index costs a re-index; deleting `captions.db` costs the captions again. Model weights are downloaded by their libraries into `~/.cache`, outside the tool's control.
 
 Every write passes one check, `moment_miner/guard.py`. It refuses to replace an existing video, and a path outside the data folder and the outputs named to the command. A refused write stops the command and names the path.
 
@@ -181,7 +198,7 @@ docker run --rm moment-miner:dev     # run the test suite
 
 Footage is mounted read-only and never copied. `make` keeps its data in `~/.mm_data` and the model weights in `~/.cache/moment-miner`, and runs the container as you, so both hold ordinary files you own. `DATA` and `CACHE` take a docker volume name or an absolute path, so the index and the model weights can sit on the same drive as the footage rather than on the system disk.
 
-Day to day, the Makefile wraps all of this: `make test`, `make index VIDEOS=/path`, `make search Q="kong vault" OUT=clips`, `make cut PROJECT=clips/<file>.llc`, `make caption VIDEOS=/path`, `make annotate TEMPLATE=parkour`, `make eval`, `make probe PROMPTS=my.txt`, `make serve`, `make shell` — add `GPUS=--gpus=all` on a GPU box. API keys go in `.env`, git-ignored; copy `.env.example` and fill in what you need.
+Day to day, the Makefile wraps all of this: `make test`, `make index VIDEOS=/path`, `make search Q="kong vault" OUT=clips`, `make cut PROJECT=clips/<file>.llc`, `make caption VIDEOS=/path`, `make annotate TEMPLATE=parkour` (or `PROFILE=parkour` on any target), `make eval`, `make probe PROMPTS=my.txt`, `make serve`, `make shell` — add `GPUS=--gpus=all` on a GPU box. API keys go in `.env`, git-ignored; copy `.env.example` and fill in what you need.
 
 **Vast.ai:** either push the image (`docker tag moment-miner <user>/moment-miner && docker push <user>/moment-miner`) and use it as the instance image, or launch a stock `pytorch/pytorch` template and put this in the on-start script:
 
@@ -264,7 +281,7 @@ Each `mm search` CLI call reloads the models (~20 s on CPU). `mm serve` loads th
 
 ```bash
 mm serve --port 7700          # or containerized: make serve
-curl "localhost:7700/search?q=kong+vault&k=5"
+curl "localhost:7700/search?q=kong+vault&k=5"   # results: path, t0, t1, score, captions [{t0, t1, text}], best text match first
 curl localhost:7700/health    # backend, device, segment count
 ```
 
