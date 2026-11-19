@@ -279,7 +279,8 @@ def _frame_size(ctx, param, value):
                    "before sending.")
 @click.option("--caption-set", default="default", show_default=True, callback=_set_name,
               help="Keep this pass's captions under NAME in the cache, e.g. to "
-                   "compare two prompts with `mm caption-compare default NAME`.")
+                   "compare two prompts with `mm caption-compare default NAME`. "
+                   "Search reads only the default set.")
 @click.option("--caption-prompt", default="general", show_default=True,
               help="Caption prompt: a shipped name (listed below) or a file path.")
 @click.option("--caption-frames", default=None, type=int,

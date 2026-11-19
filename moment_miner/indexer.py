@@ -224,9 +224,14 @@ def caption_indexed(
     A segment with a cached caption is not bought again unless `force`; its
     cached caption is still written into the row, so a fresh index picks up
     captions bought earlier.
+
+    Search reads one set, the default one: any other `caption_set` goes to
+    the cache alone, for `caption-compare`, `probe` and `caption-export`, so
+    trying a prompt never changes what a search returns.
     """
     caption_backend.preflight()
     cache = CaptionCache(data_dir, caption_set)
+    feeds_search = caption_set == DEFAULT_SET
     prefix = str(Path(folder).resolve()).rstrip(os.sep) + os.sep
     by_path = defaultdict(list)
     for r in store.segments():
@@ -260,6 +265,8 @@ def caption_indexed(
                     counts["captioned"] += 1
                 else:
                     counts["reused"] += 1
+                if not feeds_search:
+                    continue
                 text = f"{manifest.transcript_between(r['video_id'], t0, t1)} {joined(axes)}".strip()
                 if text != r["text"]:
                     store.set_text(r["id"], text)
@@ -275,7 +282,7 @@ def caption_indexed(
             # The vote can change rows already written, so the store is
             # refreshed from the cache rather than from the per-segment pass.
             axis_rows = []
-            for r in rows:
+            for r in rows if feeds_search else []:
                 voted = cache.get(r["id"])
                 if voted is None:
                     continue
@@ -285,9 +292,9 @@ def caption_indexed(
                     store.set_text(r["id"], text)
                 axis_rows.append({"id": r["id"], "path": path,
                                   "t0": r["t0"], "t1": r["t1"], **voted})
-            if axis_store is not None:
+            if axis_store is not None and feeds_search:
                 axis_store.delete_path(path)
                 axis_store.add(axis_rows)
-    if counts["captioned"] or counts["reused"]:
+    if feeds_search and (counts["captioned"] or counts["reused"]):
         store.rebuild_fts()
     return counts

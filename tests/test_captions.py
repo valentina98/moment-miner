@@ -643,3 +643,25 @@ def test_an_abstention_never_wins_the_vote(tmp_path):
                {"action": "x", "who": "nobody", "scene": "s", "light": light}, "mock")
     sc.vote("v")
     assert sc.get("v:0.0")["light"] == "night"
+
+
+@requires_ffmpeg
+def test_only_the_default_set_feeds_search(tmp_path, synthetic_video):
+    from moment_miner.store import AxisStore
+    from moment_miner.indexer import caption_indexed
+
+    manifest, store = _indexed(tmp_path, synthetic_video)
+    data = tmp_path / "data"
+    axis_store = AxisStore(data)
+    caption_indexed(manifest, store, Recording(), synthetic_video.parent,
+                    data_dir=data, axis_store=axis_store, log=lambda *a: None)
+    axes_before = sorted(axis_store.all(), key=lambda r: r["id"])
+
+    counts = caption_indexed(manifest, store, Recording("backflip off a wall"),
+                             synthetic_video.parent, data_dir=data, caption_set="trial",
+                             axis_store=axis_store, log=lambda *a: None)
+
+    assert counts["captioned"] == 2
+    assert all(r["action"] == "backflip off a wall" for r in CaptionCache(data, "trial").rows())
+    assert len(_fts(store, "kong")) == 2 and _fts(store, "backflip") == []
+    assert sorted(axis_store.all(), key=lambda r: r["id"]) == axes_before
