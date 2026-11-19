@@ -43,6 +43,7 @@ def test_search_endpoint(server):
     assert status == 200
     assert body["results"][0]["path"] == "/x/v1.mp4"
     assert body["results"][0]["t0"] == 4.0
+    assert body["results"][0]["captions"] == [{"t0": 4.0, "t1": 12.0, "text": "kong vault"}]
 
 
 def test_search_requires_query(server):

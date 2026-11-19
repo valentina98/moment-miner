@@ -442,7 +442,7 @@ def search(data_dir, query, k, backend, as_json, output, pad, static, static_max
         h["t1"] = h["t1"] + pad if row is None else min(row["duration"], h["t1"] + pad)
     if as_json:
         click.echo(jsonlib.dumps(
-            [{**{k_: h[k_] for k_ in ("t0", "t1", "score", "text")}, "path": on_host(h["path"])}
+            [{**{k_: h[k_] for k_ in ("t0", "t1", "score", "captions")}, "path": on_host(h["path"])}
              for h in hits], indent=2))
     elif not hits:
         click.echo("no results")
@@ -450,8 +450,8 @@ def search(data_dir, query, k, backend, as_json, output, pad, static, static_max
         for h in hits:
             click.echo(f"{on_host(h['path'])}\n  {fmt_ts(h['t0'])} - {fmt_ts(h['t1'])}"
                        f"  (score {h['score']:.4f})")
-            if h.get("text"):
-                click.echo(f"  \"{h['text'][:120]}\"")
+            for c in h["captions"]:
+                click.echo(f"  {fmt_ts(c['t0'])} \"{c['text'][:120]}\"")
     if not hits:
         return
     if output:

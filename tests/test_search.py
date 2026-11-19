@@ -74,6 +74,50 @@ def test_merge_overlapping():
     merged = merge_overlapping(hits)
     assert len(merged) == 3
     assert merged[0]["t0"] == 4.0 and merged[0]["t1"] == 16.0
+    assert merged[0]["captions"] == []
+
+
+def test_each_row_keeps_its_own_text_score(tmp_path):
+    be = MockBackend()
+    store = SegmentStore(tmp_path, be.name)
+    store.add(_rows(be, ["cliff diving preparation", "cliff jumping", "walking on a beach"]))
+    store.rebuild_fts()
+    rows = store.search(be.embed_text(["cliff jump"])[0], "cliff jump")
+    scores = {r["text"]: r["text_score"] for r in rows}
+    assert scores["cliff jumping"] > scores["cliff diving preparation"] > 0
+    assert scores["walking on a beach"] == 0.0
+
+
+def test_a_row_past_the_text_rankings_cut_still_gets_its_text_score(tmp_path):
+    from lancedb.query import MatchQuery
+
+    be = MockBackend()
+    store = SegmentStore(tmp_path, be.name)
+    long = "a slow long jump over a low brick wall in the park"
+    store.add(_rows(be, ["jump", "jump jump", "a jump", "jump down", "big jump",
+                         "jump up", "jump off", "high jump", long]))
+    store.rebuild_fts()
+    rows = {r["text"]: r for r in store.search(be.embed_text([long])[0], "jump", k=3)}
+    assert long in rows, "the vector ranking should bring it in"
+    own = {r["text"]: r["_score"] for r in
+           store.table.search(MatchQuery("jump", "text"), query_type="fts").limit(20).to_list()}
+    assert rows[long]["text_score"] == own[long] > 0
+
+
+def test_a_merged_hit_lists_every_caption_best_text_match_first():
+    hits = [
+        {"id": "1", "video_id": "v", "t0": 0.0, "t1": 8.0, "score": 0.9,
+         "text": "cliff diving preparation", "text_score": 0.44},
+        {"id": "2", "video_id": "v", "t0": 4.0, "t1": 12.0, "score": 0.5,
+         "text": "standing on a rock", "text_score": 0.0},
+        {"id": "3", "video_id": "v", "t0": 8.0, "t1": 16.0, "score": 0.4,
+         "text": "cliff jumping", "text_score": 1.45},
+    ]
+    (hit,) = merge_overlapping(hits)
+    assert (hit["t0"], hit["t1"]) == (0.0, 16.0)
+    assert [c["text"] for c in hit["captions"]] == [
+        "cliff jumping", "cliff diving preparation", "standing on a rock"]
+    assert hit["captions"][0] == {"t0": 8.0, "t1": 16.0, "text": "cliff jumping"}
 
 
 def test_mock_backend_deterministic():
@@ -117,3 +161,14 @@ def test_segments_with_no_motion_value_drop_out_of_a_filtered_search(tmp_path):
     assert search(q, be, store, k=5, static=True) == []
     assert [h["id"] for h in search(q, be, store, k=5, static=False)] == ["v1:1"]
     assert search(q, be, store, k=5)[0]["id"] == "v1:0"
+
+
+def test_a_caption_two_merged_segments_share_is_listed_once():
+    hits = [
+        {"id": str(i), "video_id": "v", "t0": t0, "t1": t0 + 8, "score": 1 - i / 10,
+         "text": text, "text_score": 1.0}
+        for i, (t0, text) in enumerate([(0.0, "kong vault"), (4.0, "kong vault"),
+                                        (8.0, "landing")])
+    ]
+    (hit,) = merge_overlapping(hits)
+    assert [c["text"] for c in hit["captions"]] == ["kong vault", "landing"]
