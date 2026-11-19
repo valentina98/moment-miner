@@ -8,6 +8,8 @@ def test_the_shipped_rankers_are_listed():
 def test_mock_scores_by_word_overlap():
     r = get_ranker("mock")
     assert r.score("pull ups", ["pull ups on bar", "vault over rail"]) == [1.0, 0.0]
+    # A joined caption separates its axes with commas.
+    assert r.score("concrete wall", ["wooden plank, concrete wall, trees"]) == [1.0]
 
 
 def test_top_reads_the_axis_it_is_given():
