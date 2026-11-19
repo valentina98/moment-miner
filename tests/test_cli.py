@@ -371,3 +371,11 @@ def test_eval_scores_the_labels_in_the_data_folder_and_names_the_file(tmp_path, 
     assert result.exit_code == 0, result.output
     assert f"labels: {data_dir / 'labels.csv'}" in result.output
     assert "(1 labels)" in result.output
+
+
+def test_term_and_hup_unwind_like_ctrl_c(tmp_path):
+    import signal
+
+    CliRunner().invoke(main, ["--data-dir", str(tmp_path), "status"])
+    assert signal.getsignal(signal.SIGTERM) is signal.default_int_handler
+    assert signal.getsignal(signal.SIGHUP) is signal.default_int_handler

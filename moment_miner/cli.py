@@ -2,6 +2,7 @@ import csv
 from collections import Counter
 import json as jsonlib
 import re
+import signal
 import time
 from importlib.resources import files as pkg_files
 from pathlib import Path
@@ -26,6 +27,11 @@ from .timefmt import fmt_ts, parse_ts
 @click.pass_context
 def main(ctx, data_dir):
     """Moment Miner: search large video archives, cut lossless clips."""
+    # A `kill` or a closed terminal unwinds like Ctrl-C, so a stopped run
+    # still removes its partial clip and settles the captions it bought.
+    for name in ("SIGTERM", "SIGHUP"):
+        if hasattr(signal, name):
+            signal.signal(getattr(signal, name), signal.default_int_handler)
     ctx.obj = Path(data_dir).expanduser()
     guard.arm(ctx.obj)
     ctx.call_on_close(guard.disarm)
