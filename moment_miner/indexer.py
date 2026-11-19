@@ -281,20 +281,21 @@ def caption_indexed(
             cache.vote(rows[0]["video_id"])
             # The vote can change rows already written, so the store is
             # refreshed from the cache rather than from the per-segment pass.
-            axis_rows = []
-            for r in rows if feeds_search else []:
-                voted = cache.get(r["id"])
-                if voted is None:
-                    continue
-                text = (f"{manifest.transcript_between(r['video_id'], r['t0'], r['t1'])} "
-                        f"{joined(voted)}").strip()
-                if text != r["text"]:
-                    store.set_text(r["id"], text)
-                axis_rows.append({"id": r["id"], "path": path,
-                                  "t0": r["t0"], "t1": r["t1"], **voted})
-            if axis_store is not None and feeds_search:
-                axis_store.delete_path(path)
-                axis_store.add(axis_rows)
+            if feeds_search:
+                axis_rows = []
+                for r in rows:
+                    voted = cache.get(r["id"])
+                    if voted is None:
+                        continue
+                    text = (f"{manifest.transcript_between(r['video_id'], r['t0'], r['t1'])} "
+                            f"{joined(voted)}").strip()
+                    if text != r["text"]:
+                        store.set_text(r["id"], text)
+                    axis_rows.append({"id": r["id"], "path": path,
+                                      "t0": r["t0"], "t1": r["t1"], **voted})
+                if axis_store is not None:
+                    axis_store.delete_path(path)
+                    axis_store.add(axis_rows)
     if feeds_search and (counts["captioned"] or counts["reused"]):
         store.rebuild_fts()
     return counts
