@@ -20,6 +20,23 @@ def test_parkour_ships_and_every_key_is_an_option_of_its_command():
         assert set(keys) <= set(_option_names(main.commands[command])), command
 
 
+def test_parkour_leaves_out_losslesscut_exports(tmp_path, monkeypatch):
+    from moment_miner import cli
+
+    monkeypatch.setattr(cli, "_report_stale_elsewhere", lambda *a: None)
+    monkeypatch.setattr("moment_miner.indexer.index_pending",
+                        lambda *a, **kw: {"indexed": 0, "errors": 0, "segments": 0})
+    footage = tmp_path / "footage"
+    footage.mkdir()
+    for name in ("2M4A8050.MP4", "2M4A8050-00.00.23.993-00.00.28.358.MP4",
+                 "2M4A8050-merged-1760000000000.MP4"):
+        (footage / name).write_bytes(b"x" * 64)
+    r = _mm(tmp_path / "data", "index", str(footage), "--backend", "mock", "--no-estimate",
+            "--profile", "parkour")
+    assert r.exit_code == 0, r.output
+    assert "skipped: 2 video(s) matching --skip" in r.output
+
+
 def test_every_command_but_help_takes_a_profile():
     for name, cmd in main.commands.items():
         assert ("--profile" in {o for p in cmd.params for o in p.opts}) == (name != "help"), name

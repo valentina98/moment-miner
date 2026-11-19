@@ -5,6 +5,9 @@
 index:
   window: 8.0
   stride: 4.0
+  # LosslessCut saves its cuts and merges beside the source, and indexing them
+  # would put every moment in the results twice.
+  skip: ["*-??.??.??.*-??.??.??.*", "*-merged-[0-9]*"]
 caption:
   model: claude-haiku-4-5
   caption-prompt: parkour
