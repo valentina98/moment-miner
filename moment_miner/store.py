@@ -12,21 +12,26 @@ COLUMNS = ["id", "video_id", "path", "t0", "t1", "text"]
 AXIS_COLUMNS = ["action", "who", "scene", "light"]
 
 
-class _TiesById(RRFReranker):
-    """Reciprocal-rank fusion in which rows with equal scores rank by id.
+class _InSegmentOrder(RRFReranker):
+    """Reciprocal-rank fusion in which rows with equal scores rank by video,
+    then by start time.
 
     Segments of one scene often share a caption word for word, so their BM25
     scores are equal, and the order lance returns equal scores in follows how
     the rows are stored: the ranking would change with a re-index of unchanged
-    footage.
+    footage. Lance cuts each ranking to the query's limit before it reaches a
+    reranker, so which of the rows tied exactly at that cut come in still
+    follows storage.
     """
+
+    TIES = [("video_id", "ascending"), ("t0", "ascending")]
 
     def rerank_hybrid(self, query, vector_results, fts_results):
         fused = super().rerank_hybrid(
             query,
-            vector_results.sort_by([("_distance", "ascending"), ("id", "ascending")]),
-            fts_results.sort_by([("_score", "descending"), ("id", "ascending")]))
-        return fused.sort_by([("_relevance_score", "descending"), ("id", "ascending")])
+            vector_results.sort_by([("_distance", "ascending"), *self.TIES]),
+            fts_results.sort_by([("_score", "descending"), *self.TIES]))
+        return fused.sort_by([("_relevance_score", "descending"), *self.TIES])
 
 
 class SegmentStore:
@@ -104,7 +109,7 @@ class SegmentStore:
             # phrase fails for want of token positions, and it needs a
             # full-text index; this scans rows no index covers yet.
             .text(MatchQuery(query, "text"))
-            .rerank(_TiesById(return_score="all"))
+            .rerank(_InSegmentOrder(return_score="all"))
             .limit(k)
         )
         if where:
