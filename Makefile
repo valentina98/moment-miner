@@ -64,8 +64,11 @@ TOKEN_MOUNT = -v "$$tok":/tmp/.claude/.credentials.json:ro
 # so what lands in DATA and OUT is yours rather than root's; that user has no
 # home in the image, hence HOME=/tmp and the cache at /cache. A host folder is
 # created first, or docker would create it owned by root.
+# --init: the container's PID 1 gets only the signals it handles, so an init
+# takes that place and passes TERM and HUP on, whatever the image runs; a
+# closed terminal then ends the run.
 RUN_NO_KEYS = $(if $(filter /%,$(DATA) $(CACHE) $(abspath $(OUT))),mkdir -p $(filter /%,$(DATA) $(CACHE) $(abspath $(OUT))) &&,) \
-	docker run --rm $(GPUS) \
+	docker run --rm --init $(GPUS) \
 	--user $(shell id -u):$(shell id -g) -e HOME=/tmp -e XDG_CACHE_HOME=/cache \
 	$(HOST_PATHS) \
 	-v $(abspath $(VIDEOS)):/videos:ro \
@@ -88,7 +91,7 @@ dev-image:
 	docker build -t $(IMAGE):dev .
 
 test: dev-image
-	docker run --rm $(IMAGE):dev
+	docker run --rm --init $(IMAGE):dev
 
 # Each target runs the mm command of the same name; ARGS adds options to any of them.
 # Measures this machine once on 24 s of SUB (a video), so `index` can print an ETA; index runs it itself when missing.
