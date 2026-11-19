@@ -314,10 +314,15 @@ def caption(data_dir, folder, model, allow_paid, paid_budget_usd, backend, frame
 
     store = SegmentStore(data_dir, backend)
     try:
+        caption_backend = get_caption_backend(
+            model, allow_paid=allow_paid, prompt=caption_prompt,
+            paid_budget_usd=paid_budget_usd)
+    except ValueError as e:
+        # An unknown model or prompt; the message names which.
+        raise click.BadParameter(str(e)) from e
+    try:
         result = caption_indexed(
-            Manifest(data_dir / "manifest.db"), store,
-            get_caption_backend(model, allow_paid=allow_paid, prompt=caption_prompt,
-                                paid_budget_usd=paid_budget_usd),
+            Manifest(data_dir / "manifest.db"), store, caption_backend,
             folder, frame_w=frame_size[0], frame_h=frame_size[1],
             axis_store=AxisStore(data_dir),
             data_dir=data_dir, caption_set=caption_set, caption_frames=caption_frames,

@@ -371,3 +371,13 @@ def test_eval_scores_the_labels_in_the_data_folder_and_names_the_file(tmp_path, 
     assert result.exit_code == 0, result.output
     assert f"labels: {data_dir / 'labels.csv'}" in result.output
     assert "(1 labels)" in result.output
+
+
+def test_an_unknown_caption_prompt_or_model_is_one_error_line(tmp_path):
+    for args, said in ((["--model", "claude-haiku-4-5", "--caption-prompt", "nope"],
+                        "unknown caption prompt: 'nope'"),
+                       (["--model", "nope"], "unknown caption backend: 'nope'")):
+        result = CliRunner().invoke(main, [
+            "--data-dir", str(tmp_path / "data"), "caption", str(tmp_path), *args])
+        assert result.exit_code == 2 and isinstance(result.exception, SystemExit)
+        assert f"Error: Invalid value: {said}" in result.output
