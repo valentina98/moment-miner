@@ -74,7 +74,7 @@ RUN = $(RUN_NO_KEYS) \
 	-e ANTHROPIC_API_KEY \
 	-e TYPESAFE_API_KEY
 
-.PHONY: image dev-image test calibrate index caption search cut annotate eval status probe serve shell
+.PHONY: image dev-image test calibrate index caption search cut annotate eval status prune probe serve shell
 
 image:
 	docker build --target runtime -t $(IMAGE) .
@@ -113,6 +113,11 @@ eval: image
 
 status: image
 	$(RUN_NO_KEYS) $(IMAGE) status $(ARGS)
+
+# Asks before removing (-i for the answer); ARGS=--yes removes without asking. VIDEOS
+# must be the folder the index was built from, or every video looks missing.
+prune: image
+	$(RUN_NO_KEYS) -i $(IMAGE) prune $(ARGS)
 
 # Keys only for the hosted ranker.
 probe: image

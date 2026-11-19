@@ -38,7 +38,7 @@ $ mm cut ~/.mm_data/cuts/athlete-performs-a-kong-vault_<timestamp>/video_001-ath
 
 | Command | Purpose |
 |---|---|
-| `mm index FOLDER` | scan recursively, index new, changed and previously failed videos under FOLDER and any whose segment geometry changed, drop videos no longer on disk and leave out those matching `--skip`; other folders are only reported, never touched; prints an ETA first and a progress bar over segments while it runs; never captions (`--skip`, `--reindex`, `--no-asr`, `--backend`, `--no-estimate`) |
+| `mm index FOLDER` | scan recursively, index new, changed and previously failed videos under FOLDER and any whose segment geometry changed, drop videos no longer on disk from every model's index (unless all of them are, which looks like an unplugged drive) and leave out those matching `--skip`; other folders are only reported, never touched; prints an ETA first and a progress bar over segments while it runs; never captions (`--skip`, `--reindex`, `--no-asr`, `--backend`, `--no-estimate`) |
 | `mm calibrate VIDEO` | measure this machine's index speed on the first 24 s of VIDEO, for the ETA; `mm index` runs it by itself the first time. On a 4K 50 fps CPU box it reads 8–15% above the full-run rate, so the ETA errs long |
 | `mm search QUERY` | ranked timestamps, each widened by `--pad`, and one LosslessCut project per video; cuts nothing (`-k`, `-o`, `--pad`, `--json`, `--static`/`--moving`, `--static-max`) |
 | `mm cut PROJECT.llc…` | every segment of each project as a lossless clip, exactly as the project says, from `mm search` or saved in LosslessCut; a failed or taken clip does not stop the rest (`-o`, `--no-smart`, `--re-encode` with `--size`, `--codec`, `--crf`, `--fps`, `--no-audio`) |
@@ -50,6 +50,7 @@ $ mm cut ~/.mm_data/cuts/athlete-performs-a-kong-vault_<timestamp>/video_001-ath
 | `mm caption-export [SET]` | one caption set as `SET.csv`, for use outside the tool (`-o`) |
 | `mm serve` | resident HTTP search daemon (`/search`, `/health`) |
 | `mm status` | index statistics and the caption sets in the cache (`--errors` lists failed files) |
+| `mm prune [FOLDER]` | remove indexed videos whose file is gone, after asking, including a folder `mm index` keeps because every video in it is missing; every model's rows go, captions stay in the cache; indexes nothing, deletes no file (`--yes`) |
 | `mm help [COMMAND]` | this list / per-command help (also `--version`) |
 
 All commands take `--data-dir` (default `~/.mm_data`) before the subcommand.
