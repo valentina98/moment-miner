@@ -104,6 +104,12 @@ def index(data_dir, folder, backend, window, stride, asr, asr_model, reindex, es
 
     manifest = Manifest(data_dir / "manifest.db")
     counts = manifest.scan(folder, skip)
+    # Docker Desktop binds an unmounted drive as an empty folder, so an empty
+    # scan with nothing indexed there before is a mistake, not a no-op. A video
+    # left out by --skip was still found.
+    if not any(counts[k] for k in ("new", "changed", "unchanged", "missing", "skipped", "excluded")):
+        raise click.ClickException(
+            f"no videos found under {on_host(folder)} -- is the drive mounted?")
     if reindex:
         manifest.reset(folder)
     be = get_backend(backend)
