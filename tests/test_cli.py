@@ -373,6 +373,14 @@ def test_eval_scores_the_labels_in_the_data_folder_and_names_the_file(tmp_path, 
     assert "(1 labels)" in result.output
 
 
+def test_term_and_hup_unwind_like_ctrl_c(tmp_path):
+    import signal
+
+    CliRunner().invoke(main, ["--data-dir", str(tmp_path), "status"])
+    assert signal.getsignal(signal.SIGTERM) is signal.default_int_handler
+    assert signal.getsignal(signal.SIGHUP) is signal.default_int_handler
+
+
 def test_a_caption_prompt_or_model_the_backend_refuses_is_one_error_line(tmp_path):
     cases = ((["--model", "claude-haiku-4-5", "--caption-prompt", "nope"],
               "unknown caption prompt: 'nope'"),
