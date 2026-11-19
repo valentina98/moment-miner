@@ -189,7 +189,8 @@ def test_a_reindex_keeps_the_stored_captions(tmp_path, synthetic_video):
     from moment_miner.store import AxisStore, SegmentStore
 
     data_dir = _indexed(tmp_path, synthetic_video)
-    axes = {"action": "kong vault", "who": "one person", "scene": "park", "light": "sunny"}
+    axes = {"action": "kong vault", "who": "one person", "scene": "park", "light": "sunny",
+            "things": "rail", "move": ""}
     AxisStore(data_dir).add([{"id": s["id"], "path": s["path"], "t0": s["t0"], "t1": s["t1"], **axes}
                              for s in SegmentStore(data_dir, "mock").segments()])
     Manifest(data_dir / "manifest.db").reset(synthetic_video.parent)
@@ -199,7 +200,7 @@ def test_a_reindex_keeps_the_stored_captions(tmp_path, synthetic_video):
     assert result.exit_code == 0, result.output
     assert "indexed': 1" in result.output
     texts = {s["text"] for s in SegmentStore(data_dir, "mock").segments()}
-    assert texts == {"kong vault, one person, park, sunny"}
+    assert texts == {"kong vault, one person, park, sunny, rail"}
 
 
 # cli spec rule 2: one name per option. These are the names it replaced.
@@ -371,3 +372,27 @@ def test_eval_scores_the_labels_in_the_data_folder_and_names_the_file(tmp_path, 
     assert result.exit_code == 0, result.output
     assert f"labels: {data_dir / 'labels.csv'}" in result.output
     assert "(1 labels)" in result.output
+
+
+def test_term_and_hup_unwind_like_ctrl_c(tmp_path):
+    import signal
+
+    CliRunner().invoke(main, ["--data-dir", str(tmp_path), "status"])
+    assert signal.getsignal(signal.SIGTERM) is signal.default_int_handler
+    assert signal.getsignal(signal.SIGHUP) is signal.default_int_handler
+
+
+def test_a_caption_prompt_or_model_the_backend_refuses_is_one_error_line(tmp_path):
+    cases = ((["--model", "claude-haiku-4-5", "--caption-prompt", "nope"],
+              "unknown caption prompt: 'nope'"),
+             (["--model", "claude-haiku-4-5", "--caption-prompt", str(tmp_path)], "directory"),
+             (["--model", "nope"], "unknown caption backend: 'nope'"))
+    (tmp_path / "x.d").mkdir()
+    for args, said in cases:
+        args = [str(tmp_path / "x.d") if a == str(tmp_path) else a for a in args]
+        result = CliRunner().invoke(main, [
+            "--data-dir", str(tmp_path / "data"), "caption", str(tmp_path), *args])
+        assert result.exit_code == 2 and isinstance(result.exception, SystemExit), args
+        assert "Error: Invalid value for --model / --caption-prompt: " in result.output
+        assert said in result.output and "Traceback" not in result.output, args
+    assert not (tmp_path / "data").exists()

@@ -10,6 +10,7 @@ nothing in `search` depends on them.
 
 import json
 import os
+import re
 import urllib.request
 from abc import ABC, abstractmethod
 
@@ -42,10 +43,10 @@ class MockRanker(Ranker):
     name = "mock"
 
     def score(self, query: str, texts: list[str]) -> list[float]:
-        q = set(query.lower().split())
+        q = set(re.findall(r"\w+", query.lower()))
         out = []
         for t in texts:
-            words = set(t.lower().split())
+            words = set(re.findall(r"\w+", t.lower()))
             out.append(len(q & words) / len(q) if q else 0.0)
         return out
 

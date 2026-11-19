@@ -18,7 +18,7 @@ Pull-ups
 
 ## Why it scores one axis
 
-A caption carries four axes and a query constrains only the ones it names. Two of the four — `scene` and `light` — are clip-level, so every window of a clip repeats them; scoring the joined caption drowns the one part that varies. `--axis action` compares like with like. Measured on a 131-segment corpus: mean word overlap between windows of the same clip is 0.44 for the whole caption and 0.24 for the action alone.
+A caption carries the axes its prompt asks, five in each shipped prompt, and a query constrains only the ones it names. Two of them — `scene` and `light` — are clip-level, so every window of a clip repeats them; scoring the joined caption drowns the one part that varies. `--axis action` compares like with like. Measured on a 131-segment corpus: mean word overlap between windows of the same clip is 0.44 for the whole caption and 0.24 for the action alone.
 
 ## The rankers
 
@@ -28,7 +28,7 @@ A caption carries four axes and a query constrains only the ones it names. Two o
 | `laya` | a 421M decision model, Apache-2.0, run locally on CPU | CPU time, about a second per segment |
 | `jev` | a hosted decision model, same typed questions | metered; needs `TYPESAFE_API_KEY` in `.env` (see `.env.example`) |
 
-Both classifiers answer a typed yes/no question per segment and return a calibrated probability, which is why a query can match a caption that shares none of its words. Word overlap cannot: on this corpus `Descent` scores 0.000 against every segment because no caption uses the word, and `Pull-ups` scores 0.000 because every caption writes the singular `pull-up`. A query that happens to share a word does fine without a classifier -- `Swing gainer` matches the caption `swing gainer` exactly -- which is why the baseline has to be run, not assumed.
+Both classifiers answer a typed yes/no question per segment and return a calibrated probability, which is why a query can match a caption that shares none of its words. Word overlap cannot: on this corpus `Descent` scores 0.000 against every segment because no caption uses the word, and `Pull-ups` scores 0.500 against the caption `pull-up on bar`, its `pull` matching and its `ups` not. A query that happens to share its words does fine without a classifier -- `Pull-ups` scores 1.000 against `pull-ups on bar` -- which is why the baseline has to be run, not assumed.
 
 **Neither classifier is wired into `search`.** They are instruments here. Offering one in the product is a separate decision, and for the hosted one it is also a decision about a paid dependency.
 

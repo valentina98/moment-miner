@@ -2,6 +2,7 @@ import csv
 from collections import Counter
 import json as jsonlib
 import re
+import signal
 import time
 from importlib.resources import files as pkg_files
 from pathlib import Path
@@ -9,6 +10,7 @@ from pathlib import Path
 import click
 
 from . import guard
+from .captions import AXES
 from .locate import LOCATORS
 from .hostpaths import UserPath, on_host
 from .manifest import Manifest
@@ -26,6 +28,11 @@ from .timefmt import fmt_ts, parse_ts
 @click.pass_context
 def main(ctx, data_dir):
     """Moment Miner: search large video archives, cut lossless clips."""
+    # A `kill` or a closed terminal unwinds like Ctrl-C, so a stopped run
+    # still removes its partial clip and settles the captions it bought.
+    for name in ("SIGTERM", "SIGHUP"):
+        if hasattr(signal, name):
+            signal.signal(getattr(signal, name), signal.default_int_handler)
     ctx.obj = Path(data_dir).expanduser()
     guard.arm(ctx.obj)
     ctx.call_on_close(guard.disarm)
@@ -286,7 +293,8 @@ def _frame_size(ctx, param, value):
 @click.option("--caption-frames", default=None, type=int,
               help="Force the stills sent per segment. By default the count "
                    "follows from the segment's span and the indexed stride. "
-                   "Each still is ~170 input tokens, the dominant cost of a "
+                   "Each still is about width x height / 750 input tokens "
+                   "(~300 at the default 640x360), the dominant cost of a "
                    "caption pass.")
 @click.option("--caption-frames-short", default=None, type=int,
               help="Force the count for short videos instead.")
@@ -314,12 +322,17 @@ def caption(data_dir, folder, model, allow_paid, paid_budget_usd, backend, frame
     from .captions import get_caption_backend
     from .indexer import caption_indexed
 
+    try:
+        caption_backend = get_caption_backend(
+            model, allow_paid=allow_paid, prompt=caption_prompt,
+            paid_budget_usd=paid_budget_usd)
+    except (ValueError, OSError) as e:
+        # An unknown model or prompt, or a prompt file that cannot be read.
+        raise click.BadParameter(str(e), param_hint="--model / --caption-prompt") from e
     store = SegmentStore(data_dir, backend)
     try:
         result = caption_indexed(
-            Manifest(data_dir / "manifest.db"), store,
-            get_caption_backend(model, allow_paid=allow_paid, prompt=caption_prompt,
-                                paid_budget_usd=paid_budget_usd),
+            Manifest(data_dir / "manifest.db"), store, caption_backend,
             folder, frame_w=frame_size[0], frame_h=frame_size[1],
             axis_store=AxisStore(data_dir),
             data_dir=data_dir, caption_set=caption_set, caption_frames=caption_frames,
@@ -739,7 +752,7 @@ def prune(data_dir, folder, yes):
               help="A caption set from the cache (`mm status` lists them). "
                    "Defaults to the axes already in the index.")
 @click.option("--axis", default="caption", show_default=True,
-              type=click.Choice(["caption", "action", "who", "scene", "light"]),
+              type=click.Choice(["caption", *AXES]),
               help="Which axis each prompt is scored against.")
 @click.option("--ranker", default="mock", show_default=True,
               help="How to score. See the list below.")
