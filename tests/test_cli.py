@@ -92,6 +92,16 @@ def test_index_of_a_folder_with_no_videos_fails_naming_it(tmp_path):
     assert f"no videos found under {empty}" in result.output
 
 
+def test_index_of_a_folder_whose_videos_all_match_skip_does_not_fail(tmp_path):
+    folder = tmp_path / "exports"
+    folder.mkdir()
+    (folder / "a-merged-1760000000000.mp4").write_bytes(b"x" * 64)
+    result = _mm(tmp_path / "mm_data", "index", str(folder), "--backend", "mock", "--no-asr",
+                 "--skip", "*-merged-*")
+    assert result.exit_code == 0, result.output
+    assert "skipped: 1 video(s) matching --skip" in result.output
+
+
 def _indexed(tmp_path, synthetic_video):
     data_dir = tmp_path / "mm_data"
     result = _mm(data_dir, "index", str(synthetic_video.parent), "--backend", "mock",
