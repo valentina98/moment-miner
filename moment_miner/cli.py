@@ -312,14 +312,14 @@ def caption(data_dir, folder, model, allow_paid, paid_budget_usd, backend, frame
     from .captions import get_caption_backend
     from .indexer import caption_indexed
 
-    store = SegmentStore(data_dir, backend)
     try:
         caption_backend = get_caption_backend(
             model, allow_paid=allow_paid, prompt=caption_prompt,
             paid_budget_usd=paid_budget_usd)
-    except ValueError as e:
-        # An unknown model or prompt; the message names which.
-        raise click.BadParameter(str(e)) from e
+    except (ValueError, OSError) as e:
+        # An unknown model or prompt, or a prompt file that cannot be read.
+        raise click.BadParameter(str(e), param_hint="--model / --caption-prompt") from e
+    store = SegmentStore(data_dir, backend)
     try:
         result = caption_indexed(
             Manifest(data_dir / "manifest.db"), store, caption_backend,
