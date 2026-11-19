@@ -64,8 +64,11 @@ TOKEN_MOUNT = -v "$$tok":/tmp/.claude/.credentials.json:ro
 # so what lands in DATA and OUT is yours rather than root's; that user has no
 # home in the image, hence HOME=/tmp and the cache at /cache. A host folder is
 # created first, or docker would create it owned by root.
+# --init: mm would otherwise be the container's PID 1, to which the kernel
+# delivers only the signals the process handles, so a `kill` or a closed
+# terminal would leave the run going.
 RUN_NO_KEYS = $(if $(filter /%,$(DATA) $(CACHE) $(abspath $(OUT))),mkdir -p $(filter /%,$(DATA) $(CACHE) $(abspath $(OUT))) &&,) \
-	docker run --rm $(GPUS) \
+	docker run --rm --init $(GPUS) \
 	--user $(shell id -u):$(shell id -g) -e HOME=/tmp -e XDG_CACHE_HOME=/cache \
 	$(HOST_PATHS) \
 	-v $(abspath $(VIDEOS)):/videos:ro \
