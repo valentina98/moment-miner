@@ -26,7 +26,7 @@ Captions are read back on every pass. `mm caption` buys only segments that don't
 
 These tiers were reasoned about at stride 4 and do not adapt to another one — at stride 2 a full window would yield four frames instead of two, and frames are the dominant cost of a pass. `--caption-frames` forces a count and overrides the rule; `--caption-frames-short` / `--caption-frames-long` do the same per video length.
 
-**Prompt.** The `PROMPT` constant in `moment_miner/captions.py` is the single source of truth. It asks for a **label of 10 to 20 words, not a description**, in the plain words someone would type into a search box — "cutting the cake, two people, church hall with wooden beams, indoors". Sentences, framing ("a video showing"), and commentary on the shot are all banned, and a subject too small to identify must be called unclear rather than guessed. What the label names, and why those things and not others, is the next section.
+**Prompt.** The prompt is a template file, `moment_miner/templates/caption_<name>.txt` (see below). It asks for a **label, not a description**: one comma-separated line of a few words per part, in the plain words someone would type into a search box — "cutting the cake, two people, church hall with wooden beams, indoors". Sentences, framing ("a video showing"), and commentary on the shot are all banned, and a subject too small to identify must be called unclear rather than guessed. What the label names, and why those things and not others, is the next section.
 
 A longer budget turns the label into a description: *"Graffiti-covered concrete river embankment under a road bridge, people leaning on the railing above, green water and wooded hillside; the static shot barely changes."* Nobody types that, and against a BM25 index the extra words dilute the terms that matter.
 
@@ -49,7 +49,7 @@ Three things are left out on purpose. **Outcome** — clean landing, bail, slip 
 
 **What the index already measures exactly does not belong in a label.** Static-vs-moving, frame rate, duration and date are numbers, held in each segment's `motion` value and the probe metadata; a caption guessing "static shot" duplicates a measurement and spends words doing it. Those are filters — the label is for what only a reader of the frames can say.
 
-**To re-evaluate the axes:** write down the queries the new task actually types, before looking at any caption; name the axis each one searches on, since an axis no caption names is a search that cannot work however good the ranker is; then change `PROMPT` and re-caption into a separate `--caption-set`, so the old set survives as a reference to compare against. Each axis costs two to four words, and a longer label dilutes every term in it. Caption sets written by different prompts are different instruments — re-run a comparison rather than reading across.
+**To re-evaluate the axes:** write down the queries the new task actually types, before looking at any caption; name the axis each one searches on, since an axis no caption names is a search that cannot work however good the ranker is; then edit the prompt template and re-caption into a separate `--caption-set`, so the old set survives as a reference to compare against. Each axis costs two to four words, and a longer label dilutes every term in it. Caption sets written by different prompts are different instruments — re-run a comparison rather than reading across.
 
 ## Credentials
 
