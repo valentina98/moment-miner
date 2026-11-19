@@ -286,7 +286,8 @@ def _frame_size(ctx, param, value):
                    "before sending.")
 @click.option("--caption-set", default="default", show_default=True, callback=_set_name,
               help="Keep this pass's captions under NAME in the cache, e.g. to "
-                   "compare two prompts with `mm caption-compare default NAME`.")
+                   "compare two prompts with `mm caption-compare default NAME`. "
+                   "Search reads only the default set.")
 @click.option("--caption-prompt", default="general", show_default=True,
               help="Caption prompt: a shipped name (listed below) or a file path.")
 @click.option("--caption-frames", default=None, type=int,
@@ -314,7 +315,8 @@ def caption(data_dir, folder, model, allow_paid, paid_budget_usd, backend, frame
 
     The only command that captions or spends. Reads the segments from the
     index instead of re-embedding, decodes only the stills each caption
-    needs, and rewrites the searchable text. Captions are cached in the data
+    needs, and rewrites the searchable text; a pass into another
+    --caption-set leaves it as it was. Captions are cached in the data
     folder, so a segment is never bought twice.
     """
     from .captions import get_caption_backend
@@ -343,6 +345,8 @@ def caption(data_dir, folder, model, allow_paid, paid_budget_usd, backend, frame
         # Missing credentials, an unwritable cache, or no index yet.
         raise click.ClickException(str(e)) from e
     click.echo(f"done: {result}")
+    if caption_set != "default":
+        click.echo(f"set {caption_set!r} is kept in the cache only; search reads 'default'")
 
 
 @main.command("caption-compare")
