@@ -12,6 +12,23 @@ COLUMNS = ["id", "video_id", "path", "t0", "t1", "text"]
 AXIS_COLUMNS = ["action", "who", "scene", "light"]
 
 
+class _TiesById(RRFReranker):
+    """Reciprocal-rank fusion in which rows with equal scores rank by id.
+
+    Segments of one scene often share a caption word for word, so their BM25
+    scores are equal, and the order lance returns equal scores in follows how
+    the rows are stored: the ranking would change with a re-index of unchanged
+    footage.
+    """
+
+    def rerank_hybrid(self, query, vector_results, fts_results):
+        fused = super().rerank_hybrid(
+            query,
+            vector_results.sort_by([("_distance", "ascending"), ("id", "ascending")]),
+            fts_results.sort_by([("_score", "descending"), ("id", "ascending")]))
+        return fused.sort_by([("_relevance_score", "descending"), ("id", "ascending")])
+
+
 class SegmentStore:
     """One LanceDB table per embedding backend (dimensions differ)."""
 
@@ -87,7 +104,7 @@ class SegmentStore:
             # phrase fails for want of token positions, and it needs a
             # full-text index; this scans rows no index covers yet.
             .text(MatchQuery(query, "text"))
-            .rerank(RRFReranker(return_score="all"))
+            .rerank(_TiesById(return_score="all"))
             .limit(k)
         )
         if where:
