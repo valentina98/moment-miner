@@ -56,6 +56,8 @@ def test_a_profile_sets_defaults_and_the_command_line_wins(tmp_path, monkeypatch
     _own(tmp_path / "data", "wide", "index:\n  window: 12\n  stride: 6\n  asr: false\n")
     footage = tmp_path / "footage"
     footage.mkdir()
+    # `mm index` refuses a folder with no videos, as an unmounted drive.
+    (footage / "a.mp4").write_bytes(b"x" * 64)
     base = ["index", str(footage), "--backend", "mock", "--no-estimate"]
     assert _mm(tmp_path / "data", *base, "--profile", "wide").exit_code == 0
     assert seen == {"win": 12.0, "stride": 6.0, "asr": False}
