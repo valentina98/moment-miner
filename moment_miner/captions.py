@@ -15,6 +15,8 @@ import csv
 import io
 import json
 import os
+import sqlite3
+import time
 from abc import ABC, abstractmethod
 from collections import Counter
 from datetime import date
@@ -48,6 +50,15 @@ LIGHTS = ("sunny", "overcast", "golden hour", "dusk/dawn", "night", "floodlit",
           "indoors")
 
 DEFAULT_PROMPT = "general"
+
+# Seconds one caption request may take before it fails, the same limit as the
+# ranker's call (rankers.py). A caption takes ~3 s; the SDK's own default is
+# 600 s, retried twice, so a hung request stalled a pass for 30 minutes. A
+# failed request fails its video, and the next pass buys only what is missing.
+REQUEST_TIMEOUT_S = 60.0
+# `make caption` copies a refreshed subscription token into the container's
+# credential file every 5 s, so a refused request waits this long for it.
+TOKEN_REFRESH_WAIT_S = 15.0
 
 
 def parse_axes(reply: str) -> dict[str, str]:
@@ -143,7 +154,7 @@ def load_prompt(name_or_path: str = DEFAULT_PROMPT) -> str:
 
 
 class MissingCaptionCredentials(RuntimeError):
-    """Neither credential route is available."""
+    """No usable credentials: neither route is available, or the API refused them."""
 
 
 class CaptionBackend(ABC):
@@ -350,22 +361,69 @@ class ClaudeCaptionBackend(CaptionBackend):
         self._env = env
         self._allow_paid = allow_paid
         self._paid_budget_usd = paid_budget_usd
+        self._built_with: dict = {}
 
     @property
     def client(self):
         if self._client is None:
             import anthropic
 
-            kwargs = resolve_credentials(
-                env=self._env, allow_paid=self._allow_paid,
-                paid_budget_usd=self._paid_budget_usd)
+            creds = self._credentials()
+            # The token spends session quota and the key spends money, so a run
+            # stays on the route it started on.
+            if self._built_with and creds.keys() != self._built_with.keys():
+                raise MissingCaptionCredentials(
+                    "the captioning credentials changed route during the run; a run "
+                    "never switches between the subscription token and "
+                    "ANTHROPIC_API_KEY. Rerun `mm caption`; the captions bought so "
+                    "far are kept.")
+            self._built_with = creds
+            kwargs = dict(self._built_with)
             if "auth_token" in kwargs:
                 kwargs["default_headers"] = {"anthropic-beta": "oauth-2025-04-20"}
-            self._client = anthropic.Anthropic(**kwargs)
+            self._client = anthropic.Anthropic(timeout=REQUEST_TIMEOUT_S, **kwargs)
         return self._client
+
+    def _credentials(self) -> dict:
+        return resolve_credentials(env=self._env, allow_paid=self._allow_paid,
+                                   paid_budget_usd=self._paid_budget_usd)
+
+    def _wait_for_a_new_token(self) -> None:
+        if "auth_token" not in self._built_with:
+            return
+        deadline = time.monotonic() + TOKEN_REFRESH_WAIT_S
+        while True:
+            try:
+                if self._credentials() != self._built_with:
+                    return
+            except (ValueError, MissingCaptionCredentials):
+                pass  # a half-written file, or a copy with no token yet
+            if time.monotonic() >= deadline:
+                return
+            time.sleep(min(1.0, TOKEN_REFRESH_WAIT_S))
 
     def preflight(self) -> None:
         self.client
+
+    def _create(self, messages: list):
+        import anthropic
+
+        for attempt in (1, 2):
+            try:
+                return self.client.messages.create(
+                    model=self.model, max_tokens=self.max_tokens, messages=messages)
+            except anthropic.AuthenticationError as e:
+                if attempt == 2:
+                    raise MissingCaptionCredentials(
+                        f"the API refused the captioning credentials twice, read "
+                        f"again in between ({e}). Sign in to Claude Code again (or "
+                        "fix ANTHROPIC_API_KEY on the paid route) and rerun `mm "
+                        "caption`; the captions bought so far are kept."
+                    ) from e
+                # Claude Code refreshes its subscription token during a long run
+                # and revokes the old one, so the credentials are read again.
+                self._wait_for_a_new_token()
+                self._client = None
 
     def caption(self, frames: np.ndarray, span: float,
                 n_frames: int | None = None, stride: float = 4.0) -> str:
@@ -377,11 +435,7 @@ class ClaudeCaptionBackend(CaptionBackend):
         ]
         content.append({"type": "text",
                         "text": self.prompt.format(n=len(picked), span=span)})
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            messages=[{"role": "user", "content": content}],
-        )
+        response = self._create([{"role": "user", "content": content}])
         text = " ".join(
             b.text.strip() for b in response.content if b.type == "text"
         ).strip()
@@ -403,88 +457,104 @@ def get_caption_backend(name: str, **kwargs) -> CaptionBackend:
     )
 
 
-SIDECAR_NAME = "captions.csv"
-SIDECAR_COLUMNS = ["id", "t0", "t1", *AXES, "caption", "model", "written"]
+CAPTIONS_DB = "captions.db"
+DEFAULT_SET = "default"
+EXPORT_COLUMNS = ["id", "video_id", "t0", "t1", *AXES, "caption", "model", "written"]
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS captions (
+    caption_set TEXT NOT NULL,
+    id TEXT NOT NULL,
+    video_id TEXT NOT NULL,
+    t0 REAL NOT NULL,
+    t1 REAL NOT NULL,
+    action TEXT NOT NULL,
+    who TEXT NOT NULL,
+    scene TEXT NOT NULL,
+    light TEXT NOT NULL,
+    caption TEXT NOT NULL,
+    model TEXT NOT NULL,
+    written TEXT NOT NULL,
+    PRIMARY KEY (caption_set, id)
+);
+CREATE INDEX IF NOT EXISTS idx_captions_video ON captions(caption_set, video_id);
+"""
 
 
 class CaptionCache:
-    """Captions on disk, read back so a segment is never bought twice.
+    """Every caption bought, in `<data-dir>/captions.db`, read back so a
+    segment is never bought twice.
 
     A caption spends session quota (money, on the API-key route), so the cache
-    is kept apart from the index: re-indexing, a model change or a deleted
-    index never touches it. Same columns as the `captions.csv` that
-    `mm probe --captions` and `mm caption-compare` read.
+    is kept apart from the index: re-indexing, a model change, prune or a
+    deleted index never touches it. Each caption is committed the moment it is
+    bought, so a pass that stops midway, however it stops, keeps all it paid
+    for. Rows are keyed by segment id, whose video part is a content
+    fingerprint, so the same file reached through another mount or after a
+    rename finds its captions. A caption set is a name: `default`, or another
+    one holding a prompt or model to compare against it.
     """
 
-    def __init__(self, path: str | Path):
-        self.path = Path(path)
-        self.rows: dict[str, dict] = {}
-        self._dirty = False
-        if self.path.exists():
-            with self.path.open(newline="") as f:
-                self.rows = {r["id"]: r for r in csv.DictReader(f)}
+    def __init__(self, data_dir: str | Path, caption_set: str = DEFAULT_SET):
+        self.path = Path(data_dir) / CAPTIONS_DB
+        self.caption_set = caption_set
+        try:
+            writable(self.path).parent.mkdir(parents=True, exist_ok=True)
+            self.conn = sqlite3.connect(str(self.path))
+            self.conn.executescript(_SCHEMA)
+        except (OSError, sqlite3.Error) as e:
+            raise RuntimeError(f"cannot write captions to {self.path}: {e}") from e
+        self.conn.row_factory = sqlite3.Row
 
     def get(self, seg_id: str) -> dict[str, str] | None:
-        row = self.rows.get(seg_id)
-        if not row:
-            return None
-        return {a: row[a] for a in AXES}
+        row = self.conn.execute(
+            "SELECT action, who, scene, light FROM captions WHERE caption_set = ? AND id = ?",
+            (self.caption_set, seg_id)).fetchone()
+        return dict(row) if row else None
 
     def put(self, seg_id: str, t0: float, t1: float, axes: dict[str, str],
             model: str) -> None:
-        self.rows[seg_id] = {
-            "id": seg_id, "t0": f"{t0:.1f}", "t1": f"{t1:.1f}", **axes,
-            "caption": joined(axes), "model": model,
-            "written": date.today().isoformat(),
-        }
-        self._dirty = True
+        with self.conn:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO captions (caption_set, id, video_id, t0, t1, "
+                "action, who, scene, light, caption, model, written) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (self.caption_set, seg_id, seg_id.split(":")[0], t0, t1,
+                 *(axes[a] for a in AXES), joined(axes), model, date.today().isoformat()))
 
-    def check_writable(self) -> None:
-        """Fail before the first caption request, not after."""
-        writable(self.path)
-        try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            probe = self.path.parent / ".write-test"
-            probe.touch()
-            probe.unlink()
-        except OSError as e:
-            raise RuntimeError(
-                f"cannot write captions to {self.path.parent}: {e}") from e
+    def rows(self, video_ids: list[str] | None = None) -> list[dict]:
+        """This set's captions, every one or those of these videos, in time order."""
+        query = "SELECT * FROM captions WHERE caption_set = ?"
+        args: list = [self.caption_set]
+        if video_ids is not None:
+            query += f" AND video_id IN ({', '.join('?' * len(video_ids))})"
+            args += video_ids
+        rows = self.conn.execute(query + " ORDER BY video_id, t0", args).fetchall()
+        return [{k: r[k] for k in EXPORT_COLUMNS} for r in rows]
 
-    def vote(self) -> None:
-        """Collapse the clip-level axes, per video, over the rows held here."""
-        by_video: dict[str, list[dict]] = {}
-        for row in self.rows.values():
-            by_video.setdefault(row["id"].split(":")[0], []).append(row)
-        for rows in by_video.values():
-            won = vote_clip_axes(rows)
+    def vote(self, video_id: str) -> None:
+        """Collapse the clip-level axes of one video's captions in this set."""
+        rows = self.rows([video_id])
+        won = vote_clip_axes(rows)
+        with self.conn:
             for row in rows:
                 if any(row[a] != won[a] for a in CLIP_AXES):
                     row.update(won)
-                    row["caption"] = joined(row)
-                    self._dirty = True
+                    self.conn.execute(
+                        "UPDATE captions SET scene = ?, light = ?, caption = ? "
+                        "WHERE caption_set = ? AND id = ?",
+                        (row["scene"], row["light"], joined(row), self.caption_set, row["id"]))
 
-    def flush(self) -> None:
-        if not self._dirty:
-            return
-        writable(self.path).parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("w", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=SIDECAR_COLUMNS)
+    def sets(self) -> list[tuple[str, int]]:
+        """Every caption set in the cache, with its number of captions."""
+        return [(r[0], r[1]) for r in self.conn.execute(
+            "SELECT caption_set, count(*) FROM captions GROUP BY caption_set ORDER BY caption_set")]
+
+    def export(self, path: str | Path) -> int:
+        """This set as CSV, for use outside the tool. Returns the row count."""
+        rows = self.rows()
+        with Path(path).open("w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=EXPORT_COLUMNS, lineterminator="\n")
             w.writeheader()
-            for row in sorted(self.rows.values(), key=lambda r: float(r["t0"])):
-                w.writerow(row)
-        self._dirty = False
-
-
-def open_captions(data_dir: str | Path, video_id: str,
-                  caption_dir: str | Path | None = None) -> CaptionCache:
-    """The cache for one video: `<data-dir>/captions/<video id>.csv`.
-
-    Keyed by the content fingerprint, not the path, so the same file reached
-    through another mount or after a rename finds its captions. `caption_dir`
-    names a separate caption set instead (one `captions.csv` for every video),
-    for comparing prompts or models against each other.
-    """
-    if caption_dir:
-        return CaptionCache(Path(caption_dir) / SIDECAR_NAME)
-    return CaptionCache(Path(data_dir) / "captions" / f"{video_id}.csv")
+            w.writerows(rows)
+        return len(rows)

@@ -59,6 +59,20 @@ def test_every_second_of_video_is_covered():
 
 
 @requires_ffmpeg
+def test_progress_counts_every_window_the_estimate_counted(tmp_path, synthetic_video):
+    from moment_miner.calibrate import estimate
+
+    be = MockBackend()
+    manifest = Manifest(tmp_path / "mm.db")
+    manifest.scan(synthetic_video.parent)
+    planned = estimate(manifest.pending(), {"s_per_segment": 1.0}, 8.0, 4.0)[0]
+    done = []
+    result = index_pending(manifest, SegmentStore(tmp_path / "data", be.name), be,
+                           use_asr=False, log=lambda *_: None, progress=done.append)
+    assert sum(done) == planned == result["segments"]
+
+
+@requires_ffmpeg
 def test_index_and_export(tmp_path, synthetic_video):
     be = MockBackend()
     manifest = Manifest(tmp_path / "mm.db")

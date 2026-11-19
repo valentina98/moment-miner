@@ -15,6 +15,11 @@ def probe(path: str) -> dict:
     if v is None:
         raise ValueError(f"no video stream: {path}")
     a = next((s for s in info["streams"] if s["codec_type"] == "audio"), None)
+    # Cameras keep the start timecode on a data track (Canon's tmcd), others
+    # on the video stream or the file.
+    timecode = next((t["timecode"] for t in [*(s.get("tags") or {} for s in info["streams"]),
+                                              info["format"].get("tags") or {}]
+                     if t.get("timecode")), None)
     return {
         "duration": float(info["format"].get("duration") or v.get("duration") or 0),
         # When the camera was set. Reported, never depended on: a camera with
@@ -23,6 +28,9 @@ def probe(path: str) -> dict:
         "width": v.get("width"),
         "height": v.get("height"),
         "codec": v.get("codec_name"),
+        "profile": v.get("profile"),
+        "bit_rate": int(v["bit_rate"]) if v.get("bit_rate") else None,
+        "timecode": timecode,
         "has_audio": a is not None,
         "pix_fmt": v.get("pix_fmt"),
         "fps": _ratio(v.get("r_frame_rate")),

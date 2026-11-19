@@ -9,7 +9,9 @@ from .captions import (
     CaptionBackend,
     joined,
     frames_for_duration,
-    open_captions,
+    DEFAULT_SET,
+    CaptionCache,
+    MissingCaptionCredentials,
     still_times,
 )
 from .embeddings.base import EmbeddingBackend
@@ -106,9 +108,11 @@ def index_pending(
     folder=None,
     failed: dict[str, str] | None = None,
     log=print,
+    progress=None,
 ) -> dict:
     """Embed the pending videos. Captions come only from `caption_indexed`;
-    a re-embedded segment keeps the ones it had.
+    a re-embedded segment keeps the ones it had. `progress(1)` is called
+    once per window read, readable or not.
 
     `failed` maps the paths whose probe already failed in this run (the
     ETA estimate's) to the error; they are marked failed without a second
@@ -141,6 +145,8 @@ def index_pending(
             for t0, t1, frames in extract_windows(
                 path, spans, n=frames_per_window, win=win
             ):
+                if progress:
+                    progress(1)
                 if frames is None:
                     # A truncated file stops yielding from its last good packet
                     # on; everything before it is still worth indexing.
@@ -198,7 +204,7 @@ def caption_indexed(
     frame_w: int = 640,
     frame_h: int = 360,
     data_dir=None,
-    caption_dir=None,
+    caption_set: str = DEFAULT_SET,
     axis_store: AxisStore | None = None,
     caption_frames: int | None = None,
     caption_frames_short: int | None = None,
@@ -220,6 +226,7 @@ def caption_indexed(
     captions bought earlier.
     """
     caption_backend.preflight()
+    cache = CaptionCache(data_dir, caption_set)
     prefix = str(Path(folder).resolve()).rstrip(os.sep) + os.sep
     by_path = defaultdict(list)
     for r in store.segments():
@@ -237,8 +244,6 @@ def caption_indexed(
             max(r["t1"] for r in rows), short=caption_frames_short,
             normal=caption_frames, long=caption_frames_long,
             short_video_s=short_video_s, long_video_s=long_video_s)
-        cache = open_captions(data_dir, rows[0]["video_id"], caption_dir)
-        cache.check_writable()
         try:
             for r in sorted(rows, key=lambda r: r["t0"]):
                 t0, t1 = r["t0"], r["t1"]
@@ -259,13 +264,14 @@ def caption_indexed(
                 if text != r["text"]:
                     store.set_text(r["id"], text)
             counts["videos"] += 1
+        except MissingCaptionCredentials:
+            # Every later request would be refused too, so the run stops here.
+            raise
         except Exception as e:
             counts["errors"] += 1
             log(f"    ERROR: {e}")
         finally:
-            # Captions already paid for are kept even when a later one fails.
-            cache.vote()
-            cache.flush()
+            cache.vote(rows[0]["video_id"])
             # The vote can change rows already written, so the store is
             # refreshed from the cache rather than from the per-segment pass.
             axis_rows = []

@@ -52,8 +52,8 @@ def test_no_command_writes_inside_the_source_folder(tmp_path, synthetic_video):
         lambda: ["locate", "-q", "test pattern", "-v", str(synthetic_video),
                  "--backend", "mock", "-o", str(tmp_path / "locate")],
         lambda: ["annotate", str(src)],
-        lambda: ["caption-compare", *map(str, (tmp_path / "data" / "captions").glob("*.csv")),
-                 "--videos", str(src)],
+        lambda: ["caption-compare", "default"],
+        lambda: ["caption-export", "default"],
     ]
     before = _tree(src)
     for args in commands:
@@ -65,6 +65,7 @@ def test_no_command_writes_inside_the_source_folder(tmp_path, synthetic_video):
     assert len(list(cuts.glob("test-pattern_*/*.llc"))) == 1
     assert len(list(cuts.glob("test_video-test-pattern_*/01_*.mp4"))) == 1
     assert len(list(cuts.glob("caption-compare_*/caption-comparison.html"))) == 1
+    assert len(list(cuts.glob("caption-export_*/default.csv"))) == 1
     assert (tmp_path / "locate" / "locate.html").is_file()
 
 
@@ -75,7 +76,6 @@ def test_a_second_run_into_the_same_folder_replaces_nothing(tmp_path, synthetic_
     for args in (["index", str(src), "--backend", "mock", "--no-asr", "--no-estimate"],
                  ["caption", str(src), "--model", "mock", "--backend", "mock"]):
         assert _mm(tmp_path, *args).exit_code == 0
-    [captions] = (tmp_path / "data" / "captions").glob("*.csv")
     project = out / "search" / "test_video-test-pattern.llc"
     commands = {
         "search": ["search", "test pattern", "--backend", "mock", "-k", "1",
@@ -83,7 +83,8 @@ def test_a_second_run_into_the_same_folder_replaces_nothing(tmp_path, synthetic_
         "cut": ["cut", str(project), "-o", str(out / "cut")],
         "locate": ["locate", "-q", "test pattern", "-v", str(synthetic_video),
                    "--backend", "mock", "-o", str(out / "locate")],
-        "caption-compare": ["caption-compare", str(captions), "-o", str(out / "caption-compare")],
+        "caption-compare": ["caption-compare", "default", "-o", str(out / "caption-compare")],
+        "caption-export": ["caption-export", "default", "-o", str(out / "caption-export")],
     }
     for name, args in commands.items():
         first = _mm(tmp_path, *args)

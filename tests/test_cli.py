@@ -186,7 +186,7 @@ def test_a_reindex_keeps_the_stored_captions(tmp_path, synthetic_video):
 
 # cli spec rule 2: one name per option. These are the names it replaced.
 RETIRED = {"--out", "--llc-dir", "--llc", "--top", "--caption"}
-WRITES_RESULTS = {"search", "cut", "caption-compare", "locate"}
+WRITES_RESULTS = {"search", "cut", "caption-compare", "caption-export", "locate"}
 
 
 def test_every_option_has_one_name_for_one_thing():
@@ -248,6 +248,24 @@ def test_every_video_missing_looks_like_a_new_mount_and_removes_nothing(tmp_path
 
 
 @requires_ffmpeg
+def test_index_skip_removes_an_indexed_video_and_says_so(tmp_path, synthetic_video):
+    from moment_miner.store import SegmentStore
+    data_dir = tmp_path / "mm_data"
+
+    def index(*args):
+        return CliRunner().invoke(main, ["--data-dir", str(data_dir), "index",
+                                         str(synthetic_video.parent), "--backend", "mock",
+                                         "--no-asr", "--no-estimate", *args])
+
+    assert index().exit_code == 0
+    assert SegmentStore(data_dir, "mock").count() > 0
+    r = index("--skip", synthetic_video.name)
+    assert r.exit_code == 0, r.output
+    assert "test_video.mp4 (matches --skip)" in r.output
+    assert "skipped: 1 video(s) matching --skip" in r.output
+    assert SegmentStore(data_dir, "mock").count() == 0
+
+
 def _segments_for_two_models(data_dir, m):
     """A row per indexed video in two models' tables, as two backends leave them."""
     from moment_miner.store import SegmentStore
@@ -309,6 +327,7 @@ def test_prune_keeps_what_is_on_disk_and_stays_inside_its_folder(tmp_path):
     assert "nothing to prune" in again.output
 
 
+@requires_ffmpeg
 def test_eval_scores_the_labels_in_the_data_folder_and_names_the_file(tmp_path, synthetic_video):
     data_dir = tmp_path / "mm_data"
 
