@@ -13,6 +13,8 @@ dependencies = [
     "json5>=0.9",
     "lancedb>=0.15",
     "numpy>=1.26",
+    # --skip patterns, matched the way .gitignore matches them.
+    "pathspec>=1.1",
     "tqdm>=4.60",
 ]
 
