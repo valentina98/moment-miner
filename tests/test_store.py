@@ -47,3 +47,32 @@ def test_tied_scores_rank_in_segment_order_whatever_the_row_order(tmp_path):
     store.add(rows("a", [100.0, 12.0, 8.0]))
     store.rebuild_fts()
     assert ranked(store) == expected
+
+
+def test_a_tied_group_larger_than_k_is_cut_in_segment_order(tmp_path):
+    import numpy as np
+
+    from moment_miner.store import SegmentStore
+
+    rng = np.random.default_rng(0)
+    vecs = rng.normal(size=(6, 8)).astype(np.float32)
+    vecs /= np.linalg.norm(vecs, axis=1, keepdims=True)
+
+    def rows(order):
+        return [{"id": f"a:{float(i)}", "video_id": "a", "path": "/a.mp4",
+                 "t0": float(i), "t1": i + 8.0, "text": "kong vault over a rail",
+                 "vector": vecs[i], "motion": 1.0} for i in order]
+
+    def ranked(store):
+        return [h["id"] for h in store.search(vecs[5], "kong vault", k=3)]
+
+    store = SegmentStore(tmp_path, "mock")
+    store.add(rows(range(6)))
+    store.rebuild_fts()
+    first = ranked(store)
+    assert len(first) == 3
+
+    store.delete_path("/a.mp4")
+    store.add(rows([5, 3, 1, 4, 2, 0]))
+    store.rebuild_fts()
+    assert ranked(store) == first
