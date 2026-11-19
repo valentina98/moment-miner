@@ -53,9 +53,9 @@ Three things are left out on purpose. **Outcome** — clean landing, bail, slip 
 
 ## Credentials
 
-Resolved in this order, once, when the first caption is requested. The free route wins, and the paid one is refused unless it was asked for and capped.
+Resolved in this order when the first caption is requested, and again after a refused request; a run stays on the route it started on, and stops rather than switch. The free route wins, and the paid one is refused unless it was asked for and capped.
 
-1. Claude Code's subscription token: `claudeAiOauth.accessToken` in `$CLAUDE_CONFIG_DIR/.credentials.json` (default `~/.claude`), and nothing else in that file, which also holds refresh tokens and MCP servers' tokens. Under Docker the file never enters the container: `make caption` copies that one value into a temp file, mount it read-only and delete it afterwards, and no other target gets a token — spends session quota, no money
+1. Claude Code's subscription token: `claudeAiOauth.accessToken` in `$CLAUDE_CONFIG_DIR/.credentials.json` (default `~/.claude`), and nothing else in that file, which also holds refresh tokens and MCP servers' tokens. Under Docker the file never enters the container: `make caption` copies that one value into a temp file, mounts it read-only, copies it again every 5 s while the run lasts (Claude Code refreshes it and revokes the old one), and deletes it afterwards; no other target gets a token. A request the API refuses waits up to 15 s for a new token and is retried once; a second refusal stops the run, keeping the captions bought so far — spends session quota, no money
 2. `ANTHROPIC_API_KEY` — spends money, so it is used **only** with `--allow-paid` and `--paid-budget-usd` above zero. A key on its own, even with no subscription credentials present, raises rather than bills
 3. Neither — one error naming both, raised before any frame is sent
 
