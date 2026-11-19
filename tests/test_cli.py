@@ -293,6 +293,16 @@ def test_a_deleted_video_leaves_every_models_table(tmp_path):
     assert _paths_in(tmp_path / "data", "other") == kept
 
 
+def test_a_skipped_video_leaves_every_models_table(tmp_path):
+    from moment_miner.cli import _forget
+    m, folder = _two_indexed(tmp_path)
+    _segments_for_two_models(tmp_path / "data", m)
+    _forget(m, [str((folder / "a.mp4").resolve())], tmp_path / "data", "matches --skip")
+    kept = [str((folder / "b.mp4").resolve())]
+    assert _paths_in(tmp_path / "data", "mock") == kept
+    assert _paths_in(tmp_path / "data", "other") == kept
+
+
 def test_prune_asks_and_removes_what_index_keeps(tmp_path):
     m, folder = _two_indexed(tmp_path)
     data_dir = tmp_path / "data"
