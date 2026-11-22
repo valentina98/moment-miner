@@ -379,3 +379,19 @@ def test_term_and_hup_unwind_like_ctrl_c(tmp_path):
     CliRunner().invoke(main, ["--data-dir", str(tmp_path), "status"])
     assert signal.getsignal(signal.SIGTERM) is signal.default_int_handler
     assert signal.getsignal(signal.SIGHUP) is signal.default_int_handler
+
+
+def test_a_caption_prompt_or_model_the_backend_refuses_is_one_error_line(tmp_path):
+    cases = ((["--model", "claude-haiku-4-5", "--caption-prompt", "nope"],
+              "unknown caption prompt: 'nope'"),
+             (["--model", "claude-haiku-4-5", "--caption-prompt", str(tmp_path)], "directory"),
+             (["--model", "nope"], "unknown caption backend: 'nope'"))
+    (tmp_path / "x.d").mkdir()
+    for args, said in cases:
+        args = [str(tmp_path / "x.d") if a == str(tmp_path) else a for a in args]
+        result = CliRunner().invoke(main, [
+            "--data-dir", str(tmp_path / "data"), "caption", str(tmp_path), *args])
+        assert result.exit_code == 2 and isinstance(result.exception, SystemExit), args
+        assert "Error: Invalid value for --model / --caption-prompt: " in result.output
+        assert said in result.output and "Traceback" not in result.output, args
+    assert not (tmp_path / "data").exists()
