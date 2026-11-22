@@ -93,3 +93,19 @@ def test_a_wrong_profile_fails_naming_the_fix(tmp_path, text, message):
 def test_an_unknown_profile_names_the_shipped_ones(tmp_path):
     result = _mm(tmp_path / "data", "status", "--profile", "nope")
     assert result.exit_code == 2 and "parkour" in result.output
+
+
+def test_a_profile_adds_the_axes_its_caption_prompt_asks_beyond_the_default():
+    from moment_miner.captions import profile_axes
+
+    assert profile_axes("general") == ()
+    assert profile_axes("parkour") == ("move",)
+    assert "move" in profile_axes()
+
+
+def test_only_the_searches_take_several_profiles(tmp_path):
+    _own(tmp_path / "data", "wide", "index:\n  stride: 2.0\n")
+    several = _mm(tmp_path / "data", "status", "--profile", "parkour,wide")
+    assert several.exit_code == 2 and "takes one profile" in several.output
+    unknown = _mm(tmp_path / "data", "search", "kong", "--profile", "parkour,nosuch")
+    assert unknown.exit_code == 2 and "unknown profile 'nosuch'" in unknown.output

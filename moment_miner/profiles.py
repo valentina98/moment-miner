@@ -29,6 +29,12 @@ def profile_names() -> list[str]:
                   for f in tdir.iterdir() if f.name.startswith("profile_"))
 
 
+def all_profile_names(data_dir: str | Path) -> list[str]:
+    """Every profile `--profile all` stands for: the shipped ones and the user's own."""
+    own = Path(data_dir) / "profiles"
+    return sorted({*profile_names(), *(f.stem for f in own.glob("*.yaml"))})
+
+
 def find_profile(name_or_path: str, data_dir: str | Path):
     """The file a profile name or path stands for, the user's own first."""
     if Path(name_or_path).suffix in (".yaml", ".yml"):

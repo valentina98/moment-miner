@@ -161,8 +161,30 @@ def vote_clip_axes(rows: list[dict]) -> dict[str, str]:
 
 
 def joined(axes: dict[str, str]) -> str:
-    """The searchable one-line form, and what a person reads."""
+    """The one-line form a person reads."""
     return ", ".join(axes[a] for a in AXES if axes.get(a))
+
+
+def profile_axes(prompt: str | None = None) -> tuple[str, ...]:
+    """The axes a prompt asks beyond the default prompt's; with no prompt,
+    every axis the default prompt does not ask.
+
+    The default prompt's axes are what every video has, whatever it was
+    captioned with, so a search over them alone returns the same results
+    with or without a profile. An axis only a profile's prompt asks is
+    searched when that profile is named.
+    """
+    core = prompt_axes(load_prompt(DEFAULT_PROMPT))
+    asked = AXES if prompt is None else prompt_axes(load_prompt(prompt))
+    return tuple(a for a in asked if a not in core)
+
+
+def search_fields(axes: dict[str, str]) -> tuple[str, dict[str, str]]:
+    """A caption as search stores it: the default prompt's axes joined into
+    one text, and each profile axis under its own name."""
+    own = profile_axes()
+    return (", ".join(axes[a] for a in AXES if a not in own and axes.get(a)),
+            {a: axes.get(a, "") for a in own})
 
 
 def prompt_names() -> list[str]:

@@ -7,7 +7,7 @@ from .captions import (
     LONG_VIDEO_S,
     SHORT_VIDEO_S,
     CaptionBackend,
-    joined,
+    search_fields,
     frames_for_duration,
     DEFAULT_SET,
     CaptionCache,
@@ -177,7 +177,9 @@ def index_pending(
                 stored = axis_store.get([r["id"] for r in rows])
                 for row in rows:
                     if row["id"] in stored:
-                        row["text"] = f"{row['text']} {joined(stored[row['id']])}".strip()
+                        caption, own = search_fields(stored[row["id"]])
+                        row["text"] = f"{row['text']} {caption}".strip()
+                        row.update(own)
             store.delete_path(path)
             store.add(rows)
             manifest.mark_done(path, duration, settings)
@@ -194,6 +196,15 @@ def index_pending(
     if counts["segments"]:
         store.rebuild_fts()
     return counts
+
+
+def _write_caption(manifest: Manifest, store: SegmentStore, row: dict, axes: dict):
+    """Put a caption into its segment's row, if the row does not hold it yet."""
+    caption, own = search_fields(axes)
+    text = f"{manifest.transcript_between(row['video_id'], row['t0'], row['t1'])} {caption}".strip()
+    if text != row["text"] or any(row[a] != v for a, v in own.items()):
+        store.set_text(row["id"], text, own)
+        row.update(own, text=text)
 
 
 def caption_indexed(
@@ -224,9 +235,14 @@ def caption_indexed(
     A segment with a cached caption is not bought again unless `force`; its
     cached caption is still written into the row, so a fresh index picks up
     captions bought earlier.
+
+    Search reads one set, the default one: any other `caption_set` goes to
+    the cache alone, for `caption-compare`, `probe` and `caption-export`, so
+    trying a prompt never changes what a search returns.
     """
     caption_backend.preflight()
     cache = CaptionCache(data_dir, caption_set)
+    feeds_search = caption_set == DEFAULT_SET
     prefix = str(Path(folder).resolve()).rstrip(os.sep) + os.sep
     by_path = defaultdict(list)
     for r in store.segments():
@@ -261,9 +277,9 @@ def caption_indexed(
                     counts["captioned"] += 1
                 else:
                     counts["reused"] += 1
-                text = f"{manifest.transcript_between(r['video_id'], t0, t1)} {joined(axes)}".strip()
-                if text != r["text"]:
-                    store.set_text(r["id"], text)
+                if not feeds_search:
+                    continue
+                _write_caption(manifest, store, r, axes)
             counts["videos"] += 1
         except MissingCaptionCredentials:
             # Every later request would be refused too, so the run stops here.
@@ -275,21 +291,19 @@ def caption_indexed(
             cache.vote(rows[0]["video_id"])
             # The vote can change rows already written, so the store is
             # refreshed from the cache rather than from the per-segment pass.
-            axis_rows = []
-            for r in rows:
-                voted = cache.get(r["id"])
-                if voted is None:
-                    continue
-                text = (f"{manifest.transcript_between(r['video_id'], r['t0'], r['t1'])} "
-                        f"{joined(voted)}").strip()
-                if text != r["text"]:
-                    store.set_text(r["id"], text)
-                axis_rows.append({"id": r["id"], "path": path,
-                                  "t0": r["t0"], "t1": r["t1"], **voted})
-            if axis_store is not None:
-                axis_store.delete_path(path)
-                axis_store.add(axis_rows)
+            if feeds_search:
+                axis_rows = []
+                for r in rows:
+                    voted = cache.get(r["id"])
+                    if voted is None:
+                        continue
+                    _write_caption(manifest, store, r, voted)
+                    axis_rows.append({"id": r["id"], "path": path,
+                                      "t0": r["t0"], "t1": r["t1"], **voted})
+                if axis_store is not None:
+                    axis_store.delete_path(path)
+                    axis_store.add(axis_rows)
     counts["unfilled"] = caption_backend.unfilled - unfilled_before
-    if counts["captioned"] or counts["reused"]:
+    if feeds_search and (counts["captioned"] or counts["reused"]):
         store.rebuild_fts()
     return counts

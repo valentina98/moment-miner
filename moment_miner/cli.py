@@ -286,7 +286,8 @@ def _frame_size(ctx, param, value):
                    "before sending.")
 @click.option("--caption-set", default="default", show_default=True, callback=_set_name,
               help="Keep this pass's captions under NAME in the cache, e.g. to "
-                   "compare two prompts with `mm caption-compare default NAME`.")
+                   "compare two prompts with `mm caption-compare default NAME`. "
+                   "Search reads only the default set.")
 @click.option("--caption-prompt", default="general", show_default=True,
               help="Caption prompt: a shipped name (listed below) or a file path.")
 @click.option("--caption-frames", default=None, type=int,
@@ -314,7 +315,8 @@ def caption(data_dir, folder, model, allow_paid, paid_budget_usd, backend, frame
 
     The only command that captions or spends. Reads the segments from the
     index instead of re-embedding, decodes only the stills each caption
-    needs, and rewrites the searchable text. Captions are cached in the data
+    needs, and rewrites the searchable text; a pass into another
+    --caption-set leaves it as it was. Captions are cached in the data
     folder, so a segment is never bought twice.
     """
     from .captions import get_caption_backend
@@ -343,6 +345,8 @@ def caption(data_dir, folder, model, allow_paid, paid_budget_usd, backend, frame
         # Missing credentials, an unwritable cache, or no index yet.
         raise click.ClickException(str(e)) from e
     click.echo(f"done: {result}")
+    if caption_set != "default":
+        click.echo(f"set {caption_set!r} is kept in the cache only; search reads 'default'")
 
 
 @main.command("caption-compare")
@@ -447,7 +451,8 @@ def search(data_dir, query, k, backend, as_json, output, pad, static, static_max
 
     be = get_backend(backend)
     store = SegmentStore(data_dir, be.name)
-    hits = run_search(query, be, store, k=k, static=static, static_max=static_max)
+    hits = run_search(query, be, store, k=k, static=static, static_max=static_max,
+                      axes=click.get_current_context().meta.get(SEARCHED_AXES, ()))
     manifest = Manifest(data_dir / "manifest.db")
     for h in hits:
         row = manifest.video(h["path"])
@@ -551,7 +556,8 @@ def eval(data_dir, labels, k, backend):
     click.echo(f"labels: {on_host(labels)}")
     be = get_backend(backend)
     store = SegmentStore(data_dir, be.name)
-    report = evaluate(load_labels(labels), be, store, k=k)
+    report = evaluate(load_labels(labels), be, store, k=k,
+                      axes=click.get_current_context().meta.get(SEARCHED_AXES, ()))
     for q in report["per_query"]:
         click.echo(f"  {q['found']}/{q['total']}  {q['query']}")
     click.echo(
@@ -890,6 +896,12 @@ def locate(query, video, labels, videos, fps, locator_name, duration, top_k, bac
         click.echo(f"wrote {on_host(page)} ({len(panels)} panel(s))")
 
 
+# The commands that rank moments: a profile named there also adds the axes its
+# caption prompt asks to what the words are matched in.
+SEARCHES = ("search", "eval")
+SEARCHED_AXES = "moment_miner.searched_axes"
+
+
 def _profile(ctx, param, value):
     """Make the profile's section for this command the defaults of its options.
 
@@ -898,14 +910,26 @@ def _profile(ctx, param, value):
     """
     if value is None:
         return None
-    from .profiles import load_profile
+    from .captions import DEFAULT_PROMPT, profile_axes
+    from .profiles import all_profile_names, load_profile
 
+    names = (all_profile_names(ctx.obj) if value == "all"
+             else [n for n in value.split(",") if n])
+    defaults, axes = {}, []
     try:
-        sections = {name: _profile_section(name, keys)
-                    for name, keys in load_profile(value, ctx.obj).items()}
+        if len(names) != 1 and ctx.info_name not in SEARCHES:
+            raise ValueError(f"`mm {ctx.info_name}` takes one profile; only "
+                             f"{' and '.join(SEARCHES)} take several, or `all`")
+        for name in names:
+            profile = load_profile(name, ctx.obj)
+            sections = {cmd: _profile_section(cmd, keys) for cmd, keys in profile.items()}
+            defaults.update(sections.get(ctx.info_name, {}))
+            axes += profile_axes(
+                (profile.get("caption") or {}).get("caption-prompt", DEFAULT_PROMPT))
     except ValueError as e:
         raise click.BadParameter(str(e), ctx, param) from e
-    ctx.default_map = sections.get(ctx.info_name, {})
+    ctx.default_map = defaults
+    ctx.meta[SEARCHED_AXES] = tuple(dict.fromkeys(axes))
     return value
 
 
@@ -934,7 +958,12 @@ for _name, _cmd in main.commands.items():
             ["--profile"], is_eager=True, expose_value=False, callback=_profile,
             help="Take this command's defaults from a profile: a name looked up "
                  "in DATA_DIR/profiles/, then among the shipped ones, or a .yaml "
-                 "path. Options typed here still win."))
+                 "path. Options typed here still win."
+                 + (" The words are then also matched in the axes that profile's "
+                    "caption prompt adds, such as parkour's move names; several "
+                    "profiles separated by commas, or `all`, add each one's. "
+                    "Without it only the axes every video has are searched."
+                    if _name in SEARCHES else "")))
 
 
 if __name__ == "__main__":
