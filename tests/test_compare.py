@@ -13,10 +13,10 @@ def rows(n, text, video="v"):
 
 
 def cache(data_dir, name, n, text):
-    from moment_miner.captions import CaptionCache, parse_axes
+    from moment_miner.captions import CaptionCache, load_prompt, parse_axes, prompt_axes
     sc = CaptionCache(data_dir, name)
     for r in rows(n, text):
-        sc.put(r["id"], r["t0"], r["t1"], parse_axes(r["caption"].replace(",", " ")), "m")
+        sc.put(r["id"], r["t0"], r["t1"], parse_axes(r["caption"].replace(",", " "), prompt_axes(load_prompt("general"))), "m")
 
 
 # --- the agreement signal -------------------------------------------------
