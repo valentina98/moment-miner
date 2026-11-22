@@ -6,6 +6,8 @@
 
 `search()` fuses two rankings with RRF, as one LanceDB hybrid query: vector similarity over the segment embeddings, and full-text search over the `text` column (`SegmentStore.search`, `moment_miner/store.py`). That column is filled from the Whisper transcript and nothing else (`moment_miner/indexer.py`), and it carries the FTS index (`SegmentStore.rebuild_fts`).
 
+A caption goes into the row in two places. The parts the default prompt asks, which every video has, are joined into `text`. A part only a profile's prompt asks (`move` for `parkour`) gets a column of its own, with its own full-text index, and is matched only when the search names that profile (`--profile parkour`, several separated by commas, or `all`). That keeps a search without `--profile` the same on footage captioned with a profile and footage captioned without one.
+
 Footage without speech leaves that column empty, so the text half of the fusion contributes nothing and search is effectively vision-only. Captions populate it — "pull-up" or "foam pit" become findable by word rather than only by pixel similarity. Captions are appended to the same column: no schema change, no change to the fusion.
 
 ## Where captions live

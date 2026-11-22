@@ -40,6 +40,7 @@ def search(
     candidates: int = 50,
     static: bool | None = None,
     static_max: float = STATIC_MAX,
+    axes: tuple[str, ...] = (),
 ) -> list[dict]:
     where = None
     if static is not None:
@@ -49,4 +50,4 @@ def search(
         # neither side rather than being guessed at.
         where = f"motion {'<' if static else '>='} {float(static_max)}"
     vec = backend.embed_text([query])[0]
-    return merge_overlapping(store.search(vec, query, k=candidates, where=where))[:k]
+    return merge_overlapping(store.search(vec, query, k=candidates, where=where, axes=axes))[:k]

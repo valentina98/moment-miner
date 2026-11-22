@@ -3,10 +3,11 @@ from pathlib import Path
 import lancedb
 import numpy as np
 from lancedb.index import FTS
-from lancedb.query import MatchQuery
+from lancedb.query import MatchQuery, MultiMatchQuery
 from lancedb.rerankers import RRFReranker
 
 from .captions import AXES
+from .captions import profile_axes
 from .guard import writable
 
 COLUMNS = ["id", "video_id", "path", "t0", "t1", "text"]
@@ -73,6 +74,10 @@ class SegmentStore:
             return
         for r in rows:
             r["vector"] = np.asarray(r["vector"], dtype=np.float32)
+            # Every row has every profile axis, empty until a caption fills
+            # it, so a search can name an axis on any index.
+            for axis in profile_axes():
+                r.setdefault(axis, "")
         if self.table_name in self._names():
             # The same file reached under two mount roots fingerprints alike, so
             # its rows share an id and search would return the moment twice.
@@ -93,30 +98,38 @@ class SegmentStore:
     def segments(self) -> list[dict]:
         """Every row without its vector, for passes that only need the spans."""
         return (
-            self.table.search().select(COLUMNS)
+            self.table.search().select([*COLUMNS, *profile_axes()])
             .limit(max(self.count(), 1)).to_list()
         )
 
-    def set_text(self, seg_id: str, text: str):
+    def set_text(self, seg_id: str, text: str, profile: dict[str, str] | None = None):
+        """A segment's searched text, and its profile axes under their names."""
         self.table.update(where="id = '{}'".format(seg_id.replace("'", "''")),
-                          values={"text": text})
+                          values={"text": text, **(profile or {})})
 
     def rebuild_fts(self):
-        self.table.create_index("text", config=FTS(), replace=True)
+        for column in ("text", *profile_axes()):
+            self.table.create_index(column, config=FTS(), replace=True)
 
     def search(self, vec: np.ndarray, query: str, k: int = 50,
-               where: str | None = None) -> list[dict]:
+               where: str | None = None, axes: tuple[str, ...] = ()) -> list[dict]:
         """The `k` best of the vector and full-text rankings fused by
         reciprocal rank (K=60), as `score`, with each row's own BM25 score as
         `text_score` (0 when only the vector ranking found it). `where`
-        filters both rankings before they are cut to `k`."""
+        filters both rankings before they are cut to `k`.
+
+        The words are matched in `text`, and in each of the profile `axes`
+        named; a hit's `text` then carries those axes' values too, so what
+        matched is what is shown."""
+        words = (MultiMatchQuery(query, ["text", *axes]) if axes
+                 else MatchQuery(query, "text"))
         q = (
             self.table.search(query_type="hybrid")
             .vector(np.asarray(vec, dtype=np.float32))
             # Matches the words. A plain string would be parsed, so a quoted
             # phrase fails for want of token positions, and it needs a
             # full-text index; this scans rows no index covers yet.
-            .text(MatchQuery(query, "text"))
+            .text(words)
             .rerank(_InSegmentOrder(k, return_score="all"))
             .limit(k * _InSegmentOrder.OVERFETCH)
         )
@@ -134,11 +147,12 @@ class SegmentStore:
         if unscored:
             quoted = ", ".join("'{}'".format(i.replace("'", "''")) for i in unscored)
             own = {r["id"]: r["_score"] for r in
-                   self.table.search(MatchQuery(query, "text"), query_type="fts")
+                   self.table.search(words, query_type="fts")
                    .where(f"id IN ({quoted})", prefilter=True)
                    .limit(len(unscored)).to_list()}
         return [dict({c: r[c] for c in COLUMNS}, score=r["_relevance_score"],
-                     text_score=r["_score"] or own.get(r["id"], 0.0))
+                     text_score=r["_score"] or own.get(r["id"], 0.0),
+                     text=", ".join(v for v in (r["text"], *(r[a] for a in axes)) if v))
                 for r in rows]
 
     def count(self) -> int:

@@ -36,6 +36,7 @@ def evaluate(
     backend: EmbeddingBackend,
     store: SegmentStore,
     k: int = 10,
+    axes: tuple[str, ...] = (),
 ) -> dict:
     """Recall@k and MRR: a label is found if any top-k hit overlaps it."""
     by_query: dict[str, list[dict]] = defaultdict(list)
@@ -46,7 +47,7 @@ def evaluate(
     found_total = 0
     reciprocal_ranks = []
     for query, query_labels in by_query.items():
-        hits = search(query, backend, store, k=k)
+        hits = search(query, backend, store, k=k, axes=axes)
         found = 0
         for lb in query_labels:
             rank = next(

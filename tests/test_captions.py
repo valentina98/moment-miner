@@ -767,3 +767,29 @@ def test_only_the_default_set_feeds_search(tmp_path, synthetic_video):
     assert all(r["action"] == "backflip off a wall" for r in CaptionCache(data, "trial").rows())
     assert len(_fts(store, "kong")) == 2 and _fts(store, "backflip") == []
     assert sorted(axis_store.all(), key=lambda r: r["id"]) == axes_before
+
+
+class NamesTheMove(MockCaptionBackend):
+    name = "names-the-move"
+
+    def caption(self, frames, span, n_frames=None, stride=4.0):
+        return {"action": "jump over a wall", "who": "a man", "scene": "a park",
+                "light": "sunny", "things": "", "move": "kong vault"}
+
+
+@requires_ffmpeg
+def test_a_profile_axis_is_searched_only_when_its_axis_is_named(tmp_path, synthetic_video):
+    from moment_miner.embeddings.mock import MockBackend
+    from moment_miner.indexer import caption_indexed
+
+    manifest, store = _indexed(tmp_path, synthetic_video)
+    caption_indexed(manifest, store, NamesTheMove(), synthetic_video.parent,
+                    data_dir=tmp_path / "data", log=lambda *a: None)
+    vec = MockBackend().embed_text(["kong"])[0]
+
+    plain = store.search(vec, "kong")
+    assert plain and all(h["text_score"] == 0 and "kong" not in h["text"] for h in plain)
+    assert all(h["text_score"] > 0 for h in store.search(vec, "wall"))
+
+    named = store.search(vec, "kong", axes=("move",))
+    assert all(h["text_score"] > 0 and h["text"].endswith("kong vault") for h in named)

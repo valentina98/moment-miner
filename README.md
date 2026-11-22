@@ -69,6 +69,8 @@ annotate:
   template: parkour
 ```
 
+A profile also widens what a search matches. `mm search "kong vault"` matches the words in the caption parts every video has; `mm search "kong vault" --profile parkour` also matches them in the parts that profile's caption prompt adds (parkour's move names). `--profile parkour,wedding` adds both profiles' parts, `--profile all` every profile's. So results without `--profile` are the same whether or not a folder was captioned with a profile. `mm eval` takes the same.
+
 A misspelt command or option stops the command and lists the valid names. In Docker, `make <target> PROFILE=parkour` passes it to any target; `CAPTION_MODEL`, `CAPTION_PROMPT` and `TEMPLATE` are passed only when set, so they never hide what the profile says. API keys never go into a profile.
 
 ### What it writes, and where
